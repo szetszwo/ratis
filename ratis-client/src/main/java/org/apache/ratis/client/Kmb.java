@@ -21,15 +21,12 @@ import org.apache.ratis.thirdparty.com.google.gson.JsonArray;
 import org.apache.ratis.thirdparty.com.google.gson.JsonElement;
 import org.apache.ratis.thirdparty.com.google.gson.JsonObject;
 import org.apache.ratis.thirdparty.com.google.gson.JsonParser;
-import org.apache.ratis.thirdparty.org.checkerframework.checker.units.qual.K;
 
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.net.URL;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
@@ -44,12 +41,67 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 
 public class Kmb {
-  static final String URL_PREFIX     = "https://data.etabus.gov.hk/v1/transport/kmb/";
-  static final String ROUTE           = URL_PREFIX + "route/";
-  static final String STOP_ETA_PREFIX = URL_PREFIX + "stop-eta/";
-  static final String STOP_PREFIX     = URL_PREFIX + "stop/";
+  static void println(String s, Consumer<String> out) {
+    final int max = 1000;
+    out.accept(s == null? "<EMPTY_LINE>": s.length() < max? s: s.substring(0, max) + " ...");
+  }
 
-  static final JsonParser JSON_PARSER = new JsonParser();
+  static void println(String s, PrintStream out) {
+    println(s, out::println);
+  }
+
+  interface URLs {
+    String BASE = "https://data.etabus.gov.hk/v1/transport/kmb/";
+    String ROUTE = BASE + "route";
+    String STOP = BASE + "stop";
+    String STOP_ETA_PREFIX = BASE + "stop-eta/";
+    String STOP_PREFIX = BASE + "stop/";
+
+    JsonParser JSON_PARSER = new JsonParser();
+
+    static Map<String, Route> readRoutes() {
+      final JsonArray routes = JSON_PARSER.parse(readLine(ROUTE)).getAsJsonObject().getAsJsonArray("data");
+      final Map<String, Route> map = new TreeMap<>();
+      for (int i = 0; i < routes.size(); i++) {
+        final JsonObject json = routes.get(i).getAsJsonObject();
+        final String route = json.get("route").getAsString();
+        map.compute(route, (k, v) -> v != null ? v : new Route(route)).put(json);
+      }
+      return Collections.unmodifiableMap(map);
+    }
+
+    static Map<String, BusStop> readStops() {
+      final JsonArray stops = JSON_PARSER.parse(readLine(STOP)).getAsJsonObject().getAsJsonArray("data");
+      final Map<String, BusStop> map = new TreeMap<>();
+      for (int i = 0; i < stops.size(); i++) {
+        final JsonObject json = stops.get(i).getAsJsonObject();
+        final BusStop stop = BusStop.valueOf(json);
+        map.put(stop.getId(), stop);
+      }
+      return Collections.unmodifiableMap(map);
+    }
+
+    static JsonObject readStop(String stopId) {
+      return JSON_PARSER.parse(readLine(STOP_PREFIX + stopId)).getAsJsonObject();
+    }
+
+    static JsonObject readStopEta(String stopId) {
+      return JSON_PARSER.parse(readLine(STOP_ETA_PREFIX + stopId)).getAsJsonObject();
+    }
+
+    static String readLine(String url) {
+      println("readLine " + url, System.err);
+      String line = null;
+      try(BufferedReader in = new BufferedReader(new InputStreamReader(new URL(url).openStream()))) {
+        line = in.readLine();
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+      println(line, System.err);
+      return line;
+    }
+  }
+
 
   static void initTrustManager() throws NoSuchAlgorithmException, KeyManagementException {
     // All-trusting trust manager
@@ -191,6 +243,10 @@ public class Kmb {
       types.put(type, origDest);
     }
 
+    boolean match(Eta eta) {
+      return route.equalsIgnoreCase(eta.getRoute());
+    }
+
     @Override
     public String toString() {
       return route + types.values();
@@ -199,9 +255,13 @@ public class Kmb {
 
   static class BusStop {
     static BusStop get(String stopId) {
-      final JsonObject json = JSON_PARSER.parse(readLine(STOP_PREFIX + stopId)).getAsJsonObject();
+      final JsonObject json = URLs.readStop(stopId);
       final JsonObject data = json.getAsJsonObject("data");
       return new BusStop(stopId, Name.get("name", data), Coordinate.get(data));
+    }
+
+    static BusStop valueOf(JsonObject json) {
+      return new BusStop(json.get("stop").getAsString(), Name.get("name", json), Coordinate.get(json));
     }
 
     private final String id;
@@ -214,8 +274,8 @@ public class Kmb {
       this.coordinate = coordinate;
     }
 
-    String getStopEtaUrl() {
-      return STOP_ETA_PREFIX + id;
+    String getId() {
+      return id;
     }
 
     @Override
@@ -323,28 +383,26 @@ public class Kmb {
 
     @Override
     public String toString() {
-      final String s = eta != null? " will arrive " + stop + " at " + eta : "has NO eta";
+      final String t = stop + "(Stop " + seq  + ")";
+      final String s = eta != null? " will arrive " + t + " at " + eta : " has NO eta for " + t;
       return company + " " + route + " to " + dest + s + " (" + remark + " " + etaSeq + ")";
     }
   }
 
   private final Map<String, Route> routes;
+  private final Map<String, BusStop> stops;
 
   Kmb() {
-    final JsonObject obj = JSON_PARSER.parse(readLine(ROUTE)).getAsJsonObject();
-    final JsonArray data = obj.getAsJsonArray("data");
-
-    final Map<String, Route> map = new TreeMap<>();
-    for (int i = 0; i < data.size(); i++) {
-      final JsonObject json = data.get(i).getAsJsonObject();
-      final String route = json.get("route").getAsString();
-      map.compute(route, (k, v) -> v != null ? v : new Route(route)).put(json);
-    }
-    routes = Collections.unmodifiableMap(map);
+    routes = URLs.readRoutes();
+    stops = URLs.readStops();
   }
 
-  Route get(String route) {
+  Route getRoute(String route) {
     return routes.get(route);
+  }
+
+  BusStop getBusStop(String stopId) {
+    return stops.get(stopId);
   }
 
   void print(Consumer<Object> out) {
@@ -354,37 +412,36 @@ public class Kmb {
   public static void main(String[] args) throws Exception {
     initTrustManager();
 
-    final BusStop stop = BusStop.get("4B9D547F0F450784");
-    final String route = "91M";
-    readEta(route, stop, System.out::println);
-    readEta(null, stop, System.out::println);
-
     final Kmb kmb = new Kmb();
-    System.out.println(kmb.get("91M"));
-    System.out.println(kmb.get("92"));
+    final Route bus91M = kmb.getRoute("91M");
+    final Route bus92 = kmb.getRoute("92");
+
+    final BusStop lungPoonCourt = kmb.getBusStop("4B9D547F0F450784");
+    printEta(bus91M, lungPoonCourt, System.out::println);
+    printEta(null, lungPoonCourt, System.out::println);
+
+    {
+      final BusStop diamondHillStationBusTerminus = kmb.getBusStop("53889000AA9C33E2");
+      printEta(bus91M, diamondHillStationBusTerminus, System.out::println);
+      printEta(bus92, diamondHillStationBusTerminus, System.out::println);
+      printEta(null, diamondHillStationBusTerminus, System.out::println);
+    }
+
+    final BusStop diamondHillStationBusTerminus = kmb.getBusStop("10B8C166D8E60F65");
+    printEta(bus91M, diamondHillStationBusTerminus, System.out::println);
+    printEta(bus92, diamondHillStationBusTerminus, System.out::println);
+    printEta(null, diamondHillStationBusTerminus, System.out::println);
+
 //    kmb.print(System.out::println);
   }
 
-  static void readEta(String route, BusStop stop, Consumer<Object> out) {
-    final JsonObject obj = JSON_PARSER.parse(readLine(stop.getStopEtaUrl())).getAsJsonObject();
-    final JsonArray data = obj.getAsJsonArray("data");
+  static void printEta(Route route, BusStop stop, Consumer<Object> out) {
+    final JsonArray data = URLs.readStopEta(stop.getId()).getAsJsonArray("data");
     for (int i = 0; i < data.size(); i++) {
       final Eta eta = Eta.get(stop, data.get(i).getAsJsonObject());
-      if (route == null || eta.getRoute().equalsIgnoreCase(route)) {
+      if (route == null || route.match(eta)) {
         out.accept(eta);
       }
     }
-  }
-
-  static String readLine(String url) {
-    System.err.println("readLine " + url);
-    String line = null;
-    try(BufferedReader in = new BufferedReader(new InputStreamReader(new URL(url).openStream()))) {
-      line = in.readLine();
-    } catch (IOException e) {
-      e.printStackTrace();
-    }
-    System.err.println(" " + line);
-    return line;
   }
 }

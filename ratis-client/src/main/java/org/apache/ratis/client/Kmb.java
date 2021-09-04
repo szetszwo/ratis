@@ -18,8 +18,10 @@
 package org.apache.ratis.client;
 
 import org.apache.ratis.thirdparty.com.google.gson.JsonArray;
+import org.apache.ratis.thirdparty.com.google.gson.JsonElement;
 import org.apache.ratis.thirdparty.com.google.gson.JsonObject;
 import org.apache.ratis.thirdparty.com.google.gson.JsonParser;
+import org.apache.ratis.thirdparty.org.checkerframework.checker.units.qual.K;
 
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
@@ -29,21 +31,46 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.URL;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 
 public class Kmb {
-  static final String ROUTE           = "https://data.etabus.gov.hk/v1/transport/kmb/route/";
-  static final String STOP_ETA_PREFIX = "https://data.etabus.gov.hk/v1/transport/kmb/stop-eta/";
-  static final String STOP_PREFIX     = "https://data.etabus.gov.hk/v1/transport/kmb/stop/";
+  static final String URL_PREFIX     = "https://data.etabus.gov.hk/v1/transport/kmb/";
+  static final String ROUTE           = URL_PREFIX + "route/";
+  static final String STOP_ETA_PREFIX = URL_PREFIX + "stop-eta/";
+  static final String STOP_PREFIX     = URL_PREFIX + "stop/";
 
   static final JsonParser JSON_PARSER = new JsonParser();
+
+  static void initTrustManager() throws NoSuchAlgorithmException, KeyManagementException {
+    // All-trusting trust manager
+    final TrustManager[] trustAllCerts = new TrustManager[]{new X509TrustManager() {
+      @Override
+      public X509Certificate[] getAcceptedIssuers() {
+        return null;
+      }
+      @Override
+      public void checkClientTrusted(X509Certificate[] certs, String authType) {
+      }
+      @Override
+      public void checkServerTrusted(X509Certificate[] certs, String authType) {
+      }
+    }};
+
+    // Install the all-trusting trust manager
+    final SSLContext sc = SSLContext.getInstance("SSL");
+    sc.init(null, trustAllCerts, new SecureRandom());
+    HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+  }
 
   static class Name {
     static Name get(String prefix, JsonObject obj) {
@@ -87,6 +114,23 @@ public class Kmb {
 
   static class Route {
     static class Type {
+      private static ConcurrentMap<Integer, Map<Bound, Type>> TYPES = new ConcurrentHashMap<>();
+      private static Map<Bound, Type> newEnumMap(int serviceType) {
+        final EnumMap<Bound, Type> map = new EnumMap<>(Bound.class);
+        map.put(Bound.INBOUND, new Type(Bound.INBOUND, serviceType));
+        map.put(Bound.OUTBOUND, new Type(Bound.OUTBOUND, serviceType));
+        return Collections.unmodifiableMap(map);
+      }
+
+      static Type valueOf(Bound bound, int serviceType) {
+        return TYPES.compute(serviceType, (k, v) -> v != null? v: newEnumMap(serviceType))
+            .get(bound);
+      }
+
+      static int getServiceType(JsonObject obj) {
+        return Integer.parseInt(obj.get("service_type").getAsString());
+      }
+
       private final Bound bound; // "O"
       private final int serviceType; // "1"
 
@@ -128,11 +172,23 @@ public class Kmb {
     }
 
     private final String route;    // "91M"
-    private final Map<Type, OrigDest> types;
+    private final ConcurrentMap<Type, OrigDest> types = new ConcurrentHashMap<>();
 
-    Route(String route, Map<Type, OrigDest> types) {
+    Route(String route) {
       this.route = route;
-      this.types = types;
+    }
+
+    void put(JsonObject json) {
+      if (!route.equalsIgnoreCase(json.get("route").getAsString())) {
+        throw new IllegalArgumentException("Route mismatched: route=" + route + " but " + json);
+      }
+
+      final Type type = Type.valueOf(Bound.parse(json.get("bound").getAsString()),
+          Type.getServiceType(json));
+      final OrigDest origDest = new OrigDest(
+          Name.get("orig", json),
+          Name.get("dest", json));
+      types.put(type, origDest);
     }
 
     @Override
@@ -143,8 +199,8 @@ public class Kmb {
 
   static class BusStop {
     static BusStop get(String stopId) {
-      final JsonObject obj = JSON_PARSER.parse(readLine(STOP_PREFIX + stopId)).getAsJsonObject();
-      final JsonObject data = obj.getAsJsonObject("data");
+      final JsonObject json = JSON_PARSER.parse(readLine(STOP_PREFIX + stopId)).getAsJsonObject();
+      final JsonObject data = json.getAsJsonObject("data");
       return new BusStop(stopId, Name.get("name", data), Coordinate.get(data));
     }
 
@@ -194,6 +250,10 @@ public class Kmb {
   };
 
   static class DateTime {
+    static DateTime valueOf(JsonElement e) {
+      return valueOf(e.isJsonNull()? null: e.getAsString());
+    }
+
     static DateTime valueOf(String s) {
       return s == null || "null".equals(s)? null: new DateTime(
           LocalDate.parse(s, DateTimeFormatter.ISO_OFFSET_DATE_TIME),
@@ -220,13 +280,13 @@ public class Kmb {
           Company.valueOf(eta.get("co").getAsString()),
           eta.get("route").getAsString(),
           Bound.parse(eta.get("dir").getAsString()),
-          Integer.parseInt(eta.get("service_type").getAsString()),
+          Route.Type.getServiceType(eta),
           Integer.parseInt(eta.get("seq").getAsString()),
           Name.get("dest", eta),
           Integer.parseInt(eta.get("eta_seq").getAsString()),
-          DateTime.valueOf(eta.get("eta").getAsString()),
+          DateTime.valueOf(eta.get("eta")),
           Name.get("rmk", eta),
-          DateTime.valueOf(eta.get("data_timestamp").getAsString()));
+          DateTime.valueOf(eta.get("data_timestamp")));
     }
 
     private final BusStop stop;
@@ -268,29 +328,41 @@ public class Kmb {
     }
   }
 
-  public static void main(String[] args) throws Exception {
-    // All-trusting trust manager
-    final TrustManager[] trustAllCerts = new TrustManager[]{new X509TrustManager() {
-      @Override
-      public X509Certificate[] getAcceptedIssuers() {
-        return null;
-      }
-      @Override
-      public void checkClientTrusted(X509Certificate[] certs, String authType) {
-      }
-      @Override
-      public void checkServerTrusted(X509Certificate[] certs, String authType) {
-      }
-    }};
+  private final Map<String, Route> routes;
 
-    // Install the all-trusting trust manager
-    final SSLContext sc = SSLContext.getInstance("SSL");
-    sc.init(null, trustAllCerts, new SecureRandom());
-    HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+  Kmb() {
+    final JsonObject obj = JSON_PARSER.parse(readLine(ROUTE)).getAsJsonObject();
+    final JsonArray data = obj.getAsJsonArray("data");
+
+    final Map<String, Route> map = new TreeMap<>();
+    for (int i = 0; i < data.size(); i++) {
+      final JsonObject json = data.get(i).getAsJsonObject();
+      final String route = json.get("route").getAsString();
+      map.compute(route, (k, v) -> v != null ? v : new Route(route)).put(json);
+    }
+    routes = Collections.unmodifiableMap(map);
+  }
+
+  Route get(String route) {
+    return routes.get(route);
+  }
+
+  void print(Consumer<Object> out) {
+    routes.values().forEach(out);
+  }
+
+  public static void main(String[] args) throws Exception {
+    initTrustManager();
 
     final BusStop stop = BusStop.get("4B9D547F0F450784");
     final String route = "91M";
     readEta(route, stop, System.out::println);
+    readEta(null, stop, System.out::println);
+
+    final Kmb kmb = new Kmb();
+    System.out.println(kmb.get("91M"));
+    System.out.println(kmb.get("92"));
+//    kmb.print(System.out::println);
   }
 
   static void readEta(String route, BusStop stop, Consumer<Object> out) {
@@ -298,7 +370,7 @@ public class Kmb {
     final JsonArray data = obj.getAsJsonArray("data");
     for (int i = 0; i < data.size(); i++) {
       final Eta eta = Eta.get(stop, data.get(i).getAsJsonObject());
-      if (eta.getRoute().equalsIgnoreCase(route)) {
+      if (route == null || eta.getRoute().equalsIgnoreCase(route)) {
         out.accept(eta);
       }
     }

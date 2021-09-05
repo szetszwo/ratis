@@ -21,12 +21,15 @@ import org.apache.ratis.thirdparty.com.google.gson.JsonArray;
 import org.apache.ratis.thirdparty.com.google.gson.JsonElement;
 import org.apache.ratis.thirdparty.com.google.gson.JsonObject;
 import org.apache.ratis.thirdparty.com.google.gson.JsonParser;
+import org.apache.ratis.util.MemoizedSupplier;
 
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.URL;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
@@ -39,33 +42,57 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 public class Kmb {
-  static void println(String s, Consumer<String> out) {
-    final int max = 1000;
-    out.accept(s == null? "<EMPTY_LINE>": s.length() < max? s: s.substring(0, max) + " ...");
-  }
+  static class Print {
+    static synchronized void println(String s, Consumer<String> out) {
+      final int max = 1000;
+      out.accept(s == null ? "<EMPTY_LINE>" : s.length() < max ? s : s.substring(0, max) + " ...");
+    }
 
-  static void println(String s, PrintStream out) {
-    println(s, out::println);
+    static void ln() {
+      ln("");
+    }
+
+    static void ln(Object s) {
+      println(Objects.toString(s), System.out::println);
+    }
+
+    static void debug(String s) {
+      println(s, System.err::println);
+    }
   }
 
   interface URLs {
     String BASE = "https://data.etabus.gov.hk/v1/transport/kmb/";
     String ROUTE = BASE + "route";
     String STOP = BASE + "stop";
-    String STOP_ETA_PREFIX = BASE + "stop-eta/";
     String STOP_PREFIX = BASE + "stop/";
+    String STOP_ETA_PREFIX = BASE + "stop-eta/";
+
+    String ROUTE_STOP_PREFIX = BASE + "route-stop/"; // route-stop/92/inbound/1
 
     JsonParser JSON_PARSER = new JsonParser();
 
-    static Map<String, Route> readRoutes() {
+    static List<BusStop> readRouteStop(Route route, Route.Type type, BusStopMap stopMap) {
+      final String url = ROUTE_STOP_PREFIX + route.getId() + "/" + type;
+      final JsonArray array = JSON_PARSER.parse(readLine(url)).getAsJsonObject().getAsJsonArray("data");
+      final List<BusStop> stops = new ArrayList<>(array.size());
+      for(int i = 0; i < array.size(); i++) {
+        final String stopId = array.get(i).getAsJsonObject().get("stop").getAsString();
+        stops.add(Objects.requireNonNull(stopMap.get(stopId)));
+      }
+      return Collections.unmodifiableList(stops);
+    }
+
+    static Map<String, Route> readRoutes(BusStopMap stops) {
       final JsonArray routes = JSON_PARSER.parse(readLine(ROUTE)).getAsJsonObject().getAsJsonArray("data");
       final Map<String, Route> map = new TreeMap<>();
       for (int i = 0; i < routes.size(); i++) {
         final JsonObject json = routes.get(i).getAsJsonObject();
         final String route = json.get("route").getAsString();
-        map.compute(route, (k, v) -> v != null ? v : new Route(route)).put(json);
+        map.compute(route, (k, v) -> v != null ? v : new Route(route)).put(json, stops);
       }
       return Collections.unmodifiableMap(map);
     }
@@ -85,19 +112,31 @@ public class Kmb {
       return JSON_PARSER.parse(readLine(STOP_PREFIX + stopId)).getAsJsonObject();
     }
 
-    static JsonObject readStopEta(String stopId) {
-      return JSON_PARSER.parse(readLine(STOP_ETA_PREFIX + stopId)).getAsJsonObject();
+    ConcurrentMap<BusStop, List<Eta>> ETAS = new ConcurrentHashMap<>();
+
+    static List<Eta> getStopEtas(BusStop stop) {
+      return ETAS.compute(stop, (k, v) -> v != null? v: readStopEtas(stop));
+    }
+
+    static List<Eta> readStopEtas(BusStop stop) {
+      final String url = STOP_ETA_PREFIX + stop.getId();
+      final JsonArray data = JSON_PARSER.parse(readLine(url)).getAsJsonObject().getAsJsonArray("data");
+      final List<Eta> etas = new ArrayList<>(data.size());
+      for (int i = 0; i < data.size(); i++) {
+        etas.add(Eta.get(stop, data.get(i).getAsJsonObject()));
+      }
+      return etas;
     }
 
     static String readLine(String url) {
-      println("readLine " + url, System.err);
+      Print.debug("readLine " + url);
       String line = null;
       try(BufferedReader in = new BufferedReader(new InputStreamReader(new URL(url).openStream()))) {
         line = in.readLine();
       } catch (IOException e) {
         e.printStackTrace();
       }
-      println(line, System.err);
+      Print.debug(line);
       return line;
     }
   }
@@ -164,6 +203,22 @@ public class Kmb {
     }
   }
 
+  static class RouteMap {
+    private final Map<String, Route> map;
+
+    RouteMap(Map<String, Route> map) {
+      this.map = map;
+    }
+
+    Route get(String routeId) {
+      return Objects.requireNonNull(map.get(routeId), () -> "Failed to get " + routeId);
+    }
+
+    void print(Consumer<Object> out) {
+      map.values().forEach(out);
+    }
+  }
+
   static class Route {
     static class Type {
       private static ConcurrentMap<Integer, Map<Bound, Type>> TYPES = new ConcurrentHashMap<>();
@@ -183,12 +238,14 @@ public class Kmb {
         return Integer.parseInt(obj.get("service_type").getAsString());
       }
 
-      private final Bound bound; // "O"
+      private final Bound bound;
       private final int serviceType; // "1"
+      private final String name;
 
       Type(Bound bound, int serviceType) {
         this.bound = bound;
         this.serviceType = serviceType;
+        this.name = bound.name().toLowerCase() + "/" + serviceType;
       }
 
       @Override
@@ -206,15 +263,26 @@ public class Kmb {
       public int hashCode() {
         return Objects.hash(bound, serviceType);
       }
+
+      @Override
+      public String toString() {
+        return name;
+      }
     }
 
     static class OrigDest {
       private final Name orig;       // "PO LAM", "寶林", "宝林"
       private final Name dest;       // "DIAMOND HILL STATION", "鑽石山站", "钻石山站"
+      private final Supplier<List<BusStop>> stops;
 
-      OrigDest(Name orig, Name dest) {
+      OrigDest(Name orig, Name dest, Supplier<List<BusStop>> stops) {
         this.orig = orig;
         this.dest = dest;
+        this.stops = stops;
+      }
+
+      boolean isLast(int seq) {
+        return stops.get().size() == seq;
       }
 
       @Override
@@ -223,33 +291,54 @@ public class Kmb {
       }
     }
 
-    private final String route;    // "91M"
+    private final String id;    // "91M"
     private final ConcurrentMap<Type, OrigDest> types = new ConcurrentHashMap<>();
 
-    Route(String route) {
-      this.route = route;
+    Route(String id) {
+      this.id = id;
     }
 
-    void put(JsonObject json) {
-      if (!route.equalsIgnoreCase(json.get("route").getAsString())) {
-        throw new IllegalArgumentException("Route mismatched: route=" + route + " but " + json);
+    String getId() {
+      return id;
+    }
+
+    OrigDest getOrigDest(Type type) {
+      return types.get(type);
+    }
+
+    void put(JsonObject json, BusStopMap stops) {
+      if (!id.equalsIgnoreCase(json.get("route").getAsString())) {
+        throw new IllegalArgumentException("Route mismatched: route=" + id + " but " + json);
       }
 
       final Type type = Type.valueOf(Bound.parse(json.get("bound").getAsString()),
           Type.getServiceType(json));
       final OrigDest origDest = new OrigDest(
           Name.get("orig", json),
-          Name.get("dest", json));
+          Name.get("dest", json),
+          MemoizedSupplier.valueOf(() -> URLs.readRouteStop(this, type, stops)));
       types.put(type, origDest);
     }
 
     boolean match(Eta eta) {
-      return route.equalsIgnoreCase(eta.getRoute());
+      return id.equalsIgnoreCase(eta.getRoute());
     }
 
     @Override
     public String toString() {
-      return route + types.values();
+      return id + types.values();
+    }
+  }
+
+  static class BusStopMap {
+    private final Map<String, BusStop> map;
+
+    BusStopMap(Map<String, BusStop> map) {
+      this.map = map;
+    }
+
+    BusStop get(String stopId) {
+      return Objects.requireNonNull(map.get(stopId), () -> "Failed to get BusStop " + stopId);
     }
   }
 
@@ -276,6 +365,22 @@ public class Kmb {
 
     String getId() {
       return id;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (this == obj) {
+        return true;
+      } else if (!(obj instanceof BusStop)) {
+        return false;
+      }
+      final BusStop that = (BusStop) obj;
+      return Objects.equals(this.id, that.id);
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(id);
     }
 
     @Override
@@ -336,11 +441,13 @@ public class Kmb {
 
   static class Eta {
     static Eta get(BusStop stop, JsonObject eta) {
+      final Route.Type type = Route.Type.valueOf(
+          Bound.parse(eta.get("dir").getAsString()),
+          Route.Type.getServiceType(eta));
       return new Eta(stop,
           Company.valueOf(eta.get("co").getAsString()),
           eta.get("route").getAsString(),
-          Bound.parse(eta.get("dir").getAsString()),
-          Route.Type.getServiceType(eta),
+          type,
           Integer.parseInt(eta.get("seq").getAsString()),
           Name.get("dest", eta),
           Integer.parseInt(eta.get("eta_seq").getAsString()),
@@ -353,8 +460,7 @@ public class Kmb {
 
     private final Company company;
     private final String route;
-    private final Bound bound;
-    private final int serviceType;
+    private final Route.Type type;
     private final int seq;
     private final Name dest;
     private final int etaSeq;
@@ -362,13 +468,12 @@ public class Kmb {
     private final Name remark;
     private final DateTime timestamp;
 
-    Eta(BusStop stop, Company company, String route, Bound bound, int serviceType, int seq,
+    Eta(BusStop stop, Company company, String route, Route.Type type, int seq,
         Name dest, int etaSeq, DateTime eta, Name remark, DateTime timestamp) {
       this.stop = stop;
       this.company = company;
       this.route = route;
-      this.bound = bound;
-      this.serviceType = serviceType;
+      this.type = type;
       this.seq = seq;
       this.dest = dest;
       this.etaSeq = etaSeq;
@@ -381,6 +486,14 @@ public class Kmb {
       return route;
     }
 
+    Route.Type getType() {
+      return type;
+    }
+
+    int getSeq() {
+      return seq;
+    }
+
     @Override
     public String toString() {
       final String t = stop + "(Stop " + seq  + ")";
@@ -389,12 +502,12 @@ public class Kmb {
     }
   }
 
-  private final Map<String, Route> routes;
-  private final Map<String, BusStop> stops;
+  private final BusStopMap stops;
+  private final RouteMap routes;
 
   Kmb() {
-    routes = URLs.readRoutes();
-    stops = URLs.readStops();
+    stops = new BusStopMap(URLs.readStops());
+    routes = new RouteMap(URLs.readRoutes(stops));
   }
 
   Route getRoute(String route) {
@@ -405,10 +518,6 @@ public class Kmb {
     return stops.get(stopId);
   }
 
-  void print(Consumer<Object> out) {
-    routes.values().forEach(out);
-  }
-
   public static void main(String[] args) throws Exception {
     initTrustManager();
 
@@ -417,29 +526,40 @@ public class Kmb {
     final Route bus92 = kmb.getRoute("92");
 
     final BusStop lungPoonCourt = kmb.getBusStop("4B9D547F0F450784");
-    printEta(bus91M, lungPoonCourt, System.out::println);
-    printEta(null, lungPoonCourt, System.out::println);
+//    kmb.printEta(bus91M, lungPoonCourt, Print::ln);
+    kmb.printEta(null, lungPoonCourt, Print::ln);
 
-    {
-      final BusStop diamondHillStationBusTerminus = kmb.getBusStop("53889000AA9C33E2");
-      printEta(bus91M, diamondHillStationBusTerminus, System.out::println);
-      printEta(bus92, diamondHillStationBusTerminus, System.out::println);
-      printEta(null, diamondHillStationBusTerminus, System.out::println);
-    }
+    final BusStop diamondHillStationBusTerminus91M = kmb.getBusStop("53889000AA9C33E2");
+//    kmb.printEta(bus91M, diamondHillStationBusTerminus91M, Print::ln);
+    kmb.printEta(null, diamondHillStationBusTerminus91M, Print::ln);
 
-    final BusStop diamondHillStationBusTerminus = kmb.getBusStop("10B8C166D8E60F65");
-    printEta(bus91M, diamondHillStationBusTerminus, System.out::println);
-    printEta(bus92, diamondHillStationBusTerminus, System.out::println);
-    printEta(null, diamondHillStationBusTerminus, System.out::println);
+    final BusStop diamondHillStationBusTerminus92 = kmb.getBusStop("10B8C166D8E60F65");
+//    kmb.printEta(bus92, diamondHillStationBusTerminus92, Print::ln);
+    kmb.printEta(null, diamondHillStationBusTerminus92, Print::ln);
 
-//    kmb.print(System.out::println);
+    final BusStop chiLinNunnery = kmb.getBusStop("951CE3B3EB98BA3A");
+    kmb.printEta(null, chiLinNunnery, Print::ln);
+
+    final BusStop shunLeeFireStation = kmb.getBusStop("927CE95D5C98C195");
+    kmb.printEta(null, shunLeeFireStation, Print::ln);
   }
 
-  static void printEta(Route route, BusStop stop, Consumer<Object> out) {
-    final JsonArray data = URLs.readStopEta(stop.getId()).getAsJsonArray("data");
+  void printEta(Route route, BusStop stop, Consumer<Object> out) {
+    Print.ln();
+    Print.ln("ETA for " + stop);
+    final List<Eta> data = URLs.getStopEtas(stop);
     for (int i = 0; i < data.size(); i++) {
-      final Eta eta = Eta.get(stop, data.get(i).getAsJsonObject());
-      if (route == null || route.match(eta)) {
+      final Eta eta = data.get(i);
+      final Route r;
+      if (route == null) {
+        r = routes.get(eta.getRoute());
+      } else if (route.match(eta)) {
+        r = route;
+      } else {
+        r = null;
+      }
+
+      if (r != null && !r.getOrigDest(eta.getType()).isLast(eta.getSeq())) {
         out.accept(eta);
       }
     }

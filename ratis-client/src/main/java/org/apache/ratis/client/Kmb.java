@@ -182,6 +182,24 @@ public class Kmb {
     }
 
     @Override
+    public boolean equals(Object obj) {
+      if (this == obj) {
+        return true;
+      } else if (!(obj instanceof Name)) {
+        return false;
+      }
+      final Name that = (Name) obj;
+      return Objects.equals(this.tc, that.tc)
+          && Objects.equals(this.sc, that.sc)
+          && Objects.equals(this.en, that.en);
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(tc, sc, en);
+    }
+
+    @Override
     public String toString() {
       return tc;
     }
@@ -313,10 +331,18 @@ public class Kmb {
 
       final Type type = Type.valueOf(Bound.parse(json.get("bound").getAsString()),
           Type.getServiceType(json));
-      final OrigDest origDest = new OrigDest(
-          Name.get("orig", json),
-          Name.get("dest", json),
-          MemoizedSupplier.valueOf(() -> URLs.readRouteStop(this, type, stops)));
+      final Name orig = Name.get("orig", json);
+      final Name dest = Name.get("dest", json);
+      final OrigDest origDest = new OrigDest(orig, dest,
+          MemoizedSupplier.valueOf(() -> {
+            final List<BusStop> busStops = URLs.readRouteStop(this, type, stops);
+            Print.ln(getId() + " " + orig + "->" + dest + " [" + type + "]");
+            for(int i = 0; i < busStops.size(); i++) {
+              final int seq = i + 1;
+              Print.ln(String.format("  %2d: %s", seq, busStops.get(i)));
+            }
+            return busStops;
+          }));
       types.put(type, origDest);
     }
 
@@ -434,6 +460,23 @@ public class Kmb {
     }
 
     @Override
+    public boolean equals(Object obj) {
+      if (this == obj) {
+        return true;
+      } else if (!(obj instanceof DateTime)) {
+        return false;
+      }
+      final DateTime that = (DateTime) obj;
+      return Objects.equals(this.date, that.date)
+          && Objects.equals(this.time, that.time);
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(date, time);
+    }
+
+    @Override
     public String toString() {
       return time + " on " + date;
     }
@@ -494,6 +537,10 @@ public class Kmb {
       return seq;
     }
 
+    DateTime getEta() {
+      return eta;
+    }
+
     @Override
     public String toString() {
       final String t = stop + "(Stop " + seq  + ")";
@@ -547,7 +594,12 @@ public class Kmb {
   void printEta(Route route, BusStop stop, Consumer<Object> out) {
     Print.ln();
     Print.ln("ETA for " + stop);
+    getETAs(route, stop).values().forEach(list -> list.forEach(out));
+  }
+
+  Map<String, List<Eta>> getETAs(Route route, BusStop stop) {
     final List<Eta> data = URLs.getStopEtas(stop);
+    final Map<String, List<Eta>> map = new TreeMap<>();
     for (int i = 0; i < data.size(); i++) {
       final Eta eta = data.get(i);
       final Route r;
@@ -560,8 +612,16 @@ public class Kmb {
       }
 
       if (r != null && !r.getOrigDest(eta.getType()).isLast(eta.getSeq())) {
-        out.accept(eta);
+        final List<Eta> etas = map.compute(r.getId(), (k, v) -> v != null ? v : new ArrayList<>());
+        boolean found = false;
+        for(int j = 0; !found && j < etas.size(); j++) {
+          found = eta.getEta().equals(etas.get(j).getEta());
+        }
+        if (!found) {
+          etas.add(eta);
+        }
       }
     }
+    return map;
   }
 }

@@ -224,11 +224,7 @@
     <checkstyle.version>8.18</checkstyle.version>
 
     <!--metrics-->
-    <dropwizard.version>3.2.5</dropwizard.version>
-
-    <!-- LOG4J version -->
-    <log4j.version>1.2.17</log4j.version>
-
+    <dropwizard.version>4.2.4</dropwizard.version>
   </properties>
 
   <dependencyManagement>
@@ -432,11 +428,6 @@
         <scope>test</scope>
         <version>1.7.29</version>
       </dependency>
-      <dependency>
-        <groupId>log4j</groupId>
-        <artifactId>log4j</artifactId>
-        <version>${log4j.version}</version>
-      </dependency>
 
       <dependency>
         <groupId>com.beust</groupId>
@@ -452,6 +443,12 @@
 
       <dependency>
         <groupId>io.dropwizard.metrics</groupId>
+        <artifactId>metrics-jmx</artifactId>
+        <version>${dropwizard.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>io.dropwizard.metrics</groupId>
         <artifactId>metrics-jvm</artifactId>
         <version>${dropwizard.version}</version>
       </dependency>
@@ -459,7 +456,7 @@
       <dependency>
         <groupId>io.dropwizard.metrics</groupId>
         <artifactId>metrics-ganglia</artifactId>
-        <version>${dropwizard.version}</version>
+        <version>3.2.6</version>
       </dependency>
 
       <dependency>

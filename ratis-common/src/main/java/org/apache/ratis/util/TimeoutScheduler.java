@@ -191,6 +191,10 @@ public final class TimeoutScheduler implements Closeable {
     onTimeout(timeout, task, t -> log.error(errorMessage.get(), t));
   }
 
+  public <THROWABLE extends Throwable> void onTimeout(TimeDuration timeout, CheckedRunnable<THROWABLE> task) {
+    onTimeout(timeout, task, Throwable::printStackTrace);
+  }
+
   @Override
   public synchronized void close() {
     tryShutdownScheduler(scheduleID);

@@ -166,6 +166,14 @@ public interface ConfUtils {
   }
 
   @SafeVarargs
+  static char[] getChars(
+      BiFunction<String, String, String> stringGetter,
+      String key, char[] defaultValue, Consumer<String> logger, BiConsumer<String, char[]>... assertions) {
+    return get((k, d) -> stringGetter.apply(k, String.valueOf(d)).toCharArray(),
+        key, defaultValue, logger, assertions);
+  }
+
+  @SafeVarargs
   static File getFile(
       BiFunction<String, File, File> fileGetter,
       String key, File defaultValue, Consumer<String> logger, BiConsumer<String, File>... assertions) {
@@ -242,6 +250,14 @@ public interface ConfUtils {
   }
 
   @SafeVarargs
+  static void setChars(
+      BiConsumer<String, String> stringSetter, String key, char[] value,
+      BiConsumer<String, char[]>... assertions) {
+    set((k, chars) -> stringSetter.accept(k, String.valueOf(chars)),
+        key, value, assertions);
+  }
+
+  @SafeVarargs
   static void setFile(
       BiConsumer<String, File> fileSetter, String key, File value,
       BiConsumer<String, File>... assertions) {
@@ -308,6 +324,10 @@ public interface ConfUtils {
       return;
     }
     if (printKey(confClass, out, f, "PARAMETER", "CLASS",
+        (b, classField) -> b.append(classField.get(null)))) {
+      return;
+    }
+    if (printKey(confClass, out, f, "TEMPLATE", "DEFAULT",
         (b, classField) -> b.append(classField.get(null)))) {
       return;
     }

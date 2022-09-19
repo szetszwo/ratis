@@ -18,6 +18,8 @@
 package org.apache.ratis.io;
 
 public interface WriteOption {
+  WriteOption[] EMPTY_ARRAY = {};
+
   static boolean containsOption(WriteOption[] options, WriteOption target) {
     for (WriteOption option : options) {
       if (option == target) {

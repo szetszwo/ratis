@@ -20,7 +20,6 @@ package org.apache.ratis.client.impl;
 import org.apache.ratis.client.DataStreamClientRpc;
 import org.apache.ratis.client.RaftClientConfigKeys;
 import org.apache.ratis.conf.RaftProperties;
-import org.apache.ratis.datastream.impl.DataStreamPacketByteBuffer;
 import org.apache.ratis.datastream.impl.DataStreamRequestByteBuffer;
 import org.apache.ratis.datastream.impl.DataStreamRequestFilePositionCount;
 import org.apache.ratis.io.FilePositionCount;
@@ -59,7 +58,7 @@ public class OrderedStreamAsync {
 
     DataStreamRequest getDataStreamRequest() {
       if (header.getDataLength() == 0) {
-        return new DataStreamRequestByteBuffer(header, DataStreamPacketByteBuffer.EMPTY_BYTE_BUFFER);
+        return new DataStreamRequestByteBuffer(header, IOUtils.EMPTY_BYTE_BUFFER);
       } else if (data instanceof ByteBuffer) {
         return new DataStreamRequestByteBuffer(header, (ByteBuffer)data);
       } else if (data instanceof FilePositionCount) {
@@ -149,7 +148,7 @@ public class OrderedStreamAsync {
         request.getDataStreamRequest());
     long seqNum = request.getSeqNum();
 
-    final boolean isClose = StandardWriteOption.CLOSE.isOneOf(request.getDataStreamRequest().getWriteOptions());
+    final boolean isClose = request.getDataStreamRequest().writeOptions().contains(StandardWriteOption.CLOSE);
     scheduleWithTimeout(request, isClose? closeTimeout: requestTimeout);
 
     requestFuture.thenApply(reply -> {

@@ -168,4 +168,11 @@ public interface CollectionUtils {
     right.sort(comparator);
     return left.equals(right);
   }
+
+  /** @return an immutable copy of the given list. */
+  static <T> List<T> immutableList(List<T> list) {
+    return list == null || list.isEmpty()? Collections.emptyList()
+        : list.size() == 1? Collections.singletonList(list.get(0))
+        : Collections.unmodifiableList(new ArrayList<>(list));
+  }
 }

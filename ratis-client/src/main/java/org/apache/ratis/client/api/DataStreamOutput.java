@@ -26,6 +26,8 @@ import org.apache.ratis.protocol.RaftClientReply;
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.nio.channels.WritableByteChannel;
+import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /** An asynchronous output stream supporting zero buffer copying. */
@@ -37,8 +39,12 @@ public interface DataStreamOutput extends CloseAsync<DataStreamReply> {
    * @param options - options specifying how the data was written
    * @return a future of the reply.
    */
-  CompletableFuture<DataStreamReply> writeAsync(ByteBuffer src, WriteOption... options);
+  CompletableFuture<DataStreamReply> writeAsync(ByteBuffer src, List<WriteOption> options);
 
+  /** The same as writeAsync(src, Arrays.asList(options)). */
+  default CompletableFuture<DataStreamReply> writeAsync(ByteBuffer src, WriteOption... options) {
+    return writeAsync(src, Arrays.asList(options));
+  }
 
   /**
    * The same as writeAsync(src, 0, src.length(), sync_default).
@@ -62,7 +68,11 @@ public interface DataStreamOutput extends CloseAsync<DataStreamReply> {
    * @param options options specifying how the data was written
    * @return a future of the reply.
    */
-  CompletableFuture<DataStreamReply> writeAsync(FilePositionCount src, WriteOption... options);
+  CompletableFuture<DataStreamReply> writeAsync(FilePositionCount src, List<WriteOption> options);
+
+  default CompletableFuture<DataStreamReply> writeAsync(FilePositionCount src, WriteOption... options) {
+    return writeAsync(src, Arrays.asList(options));
+  }
 
   /**
    * Return the future of the {@link RaftClientReply}

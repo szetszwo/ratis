@@ -20,6 +20,14 @@ package org.apache.ratis.protocol;
 
 import org.apache.ratis.io.WriteOption;
 
+import java.util.List;
+
 public interface DataStreamRequest extends DataStreamPacket {
-  WriteOption[] getWriteOptions();
+  /** @deprecated use {@link #writeOptions()}. */
+  @Deprecated
+  default WriteOption[] getWriteOptions() {
+    return writeOptions().toArray(WriteOption.EMPTY_ARRAY);
+  }
+
+  List<WriteOption> writeOptions();
 }

@@ -44,6 +44,8 @@ import java.util.function.Supplier;
  * IO related utility methods.
  */
 public interface IOUtils {
+  ByteBuffer EMPTY_BYTE_BUFFER = ByteBuffer.allocateDirect(0).asReadOnlyBuffer();
+
   static InterruptedIOException toInterruptedIOException(
       String message, InterruptedException e) {
     final InterruptedIOException iioe = new InterruptedIOException(message);

@@ -212,7 +212,9 @@ public class FileStore implements Closeable {
     final Supplier<String> name = () -> "delete(" + relative + ") @" + getId() + ":" + index;
     final CheckedSupplier<Path, IOException> task = LogUtils.newCheckedSupplier(LOG, () -> {
       final FileInfo info = files.remove(relative);
-      FileUtils.delete(resolve(info.getRelativePath()));
+      if (info.hasFile()) {
+        FileUtils.delete(resolve(info.getRelativePath()));
+      }
       return info.getRelativePath();
     }, name);
     return submit(task, deleter);
@@ -251,14 +253,15 @@ public class FileStore implements Closeable {
   }
 
   CompletableFuture<Integer> write(
-      long index, String relative, boolean close, boolean sync, long offset, ByteString data) {
+      long index, String relative, boolean close, boolean sync, long offset, ByteString data, boolean skipEmptyFile) {
     final int size = data != null? data.size(): 0;
     LOG.trace("write {}, offset={}, size={}, close? {} @{}:{}",
         relative, offset, size, close, getId(), index);
     final boolean createNew = offset == 0L;
     final UnderConstruction uc;
     if (createNew) {
-      uc = new UnderConstruction(normalize(relative));
+      final Path normalized = normalize(relative);
+      uc = new UnderConstruction(normalized, () -> new FileStore.FileStoreDataChannel(resolve(normalized)));
       files.putNew(uc);
     } else {
       try {
@@ -270,7 +273,7 @@ public class FileStore implements Closeable {
     }
 
     return size == 0 && !close? CompletableFuture.completedFuture(0)
-        : createNew? uc.submitCreate(this::resolve, data, close, sync, writer, getId(), index)
+        : createNew? uc.submitCreate(data, close, sync, writer, getId(), index, skipEmptyFile)
         : uc.submitWrite(offset, data, close, sync, writer, getId(), index);
   }
 

@@ -109,45 +109,40 @@ public class FileStoreStateMachine extends BaseStateMachine {
     return b.build();
   }
 
-  @Override
-  public CompletableFuture<Integer> write(LogEntryProto entry) {
-    final StateMachineLogEntryProto smLog = entry.getStateMachineLogEntry();
-    final ByteString data = smLog.getLogData();
+  static WriteRequestHeaderProto getWriteRequestHeaderProto(LogEntryProto entry) {
+    final ByteString data = entry.getStateMachineLogEntry().getLogData();
     final FileStoreRequestProto proto;
     try {
       proto = FileStoreRequestProto.parseFrom(data);
     } catch (InvalidProtocolBufferException e) {
-      return FileStoreCommon.completeExceptionally(
-          entry.getIndex(), "Failed to parse data, entry=" + entry, e);
+      throw new IllegalArgumentException("Failed to parse data in entry " + entry, e);
     }
-    if (proto.getRequestCase() != FileStoreRequestProto.RequestCase.WRITEHEADER) {
+    return proto.getRequestCase() == FileStoreRequestProto.RequestCase.WRITEHEADER ?
+        proto.getWriteHeader() : null;
+  }
+
+  @Override
+  public CompletableFuture<Integer> write(LogEntryProto entry) {
+    final WriteRequestHeaderProto h = getWriteRequestHeaderProto(entry);
+    if (h == null) {
       return null;
     }
 
-    final WriteRequestHeaderProto h = proto.getWriteHeader();
     final CompletableFuture<Integer> f = files.write(entry.getIndex(),
         h.getPath().toStringUtf8(), h.getClose(),  h.getSync(), h.getOffset(),
-        smLog.getStateMachineEntry().getStateMachineData());
+        entry.getStateMachineLogEntry().getStateMachineEntry().getStateMachineData(),
+        h.getSkipEmptyFile());
     // sync only if closing the file
     return h.getClose()? f: null;
   }
 
   @Override
   public CompletableFuture<ByteString> read(LogEntryProto entry) {
-    final StateMachineLogEntryProto smLog = entry.getStateMachineLogEntry();
-    final ByteString data = smLog.getLogData();
-    final FileStoreRequestProto proto;
-    try {
-      proto = FileStoreRequestProto.parseFrom(data);
-    } catch (InvalidProtocolBufferException e) {
-      return FileStoreCommon.completeExceptionally(
-          entry.getIndex(), "Failed to parse data, entry=" + entry, e);
-    }
-    if (proto.getRequestCase() != FileStoreRequestProto.RequestCase.WRITEHEADER) {
+    final WriteRequestHeaderProto h = getWriteRequestHeaderProto(entry);
+    if (h == null) {
       return null;
     }
 
-    final WriteRequestHeaderProto h = proto.getWriteHeader();
     CompletableFuture<ExamplesProtos.ReadReplyProto> reply =
         files.read(h.getPath().toStringUtf8(), h.getOffset(), h.getLength(), false);
 

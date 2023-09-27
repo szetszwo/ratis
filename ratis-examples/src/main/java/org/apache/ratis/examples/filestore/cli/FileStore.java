@@ -20,7 +20,7 @@ package org.apache.ratis.examples.filestore.cli;
 
 import org.apache.ratis.examples.common.SubCommandBase;
 
-import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -31,10 +31,11 @@ public final class FileStore {
   }
 
   public static List<SubCommandBase> getSubCommands() {
-    List<SubCommandBase> commands = new ArrayList<>();
-    commands.add(new Server());
-    commands.add(new LoadGen());
-    commands.add(new DataStream());
-    return commands;
+    return Arrays.asList(
+        new Server(),
+        new LoadGen(),
+        new MetadataGen(),
+        new DataStream()
+    );
   }
 }

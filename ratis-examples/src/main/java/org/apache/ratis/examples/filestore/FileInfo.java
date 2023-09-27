@@ -22,6 +22,7 @@ import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
 import org.apache.ratis.util.CollectionUtils;
 import org.apache.ratis.util.JavaUtils;
 import org.apache.ratis.util.LogUtils;
+import org.apache.ratis.util.MemoizedCheckedSupplier;
 import org.apache.ratis.util.Preconditions;
 import org.apache.ratis.util.TaskQueue;
 import org.apache.ratis.util.function.CheckedFunction;
@@ -59,12 +60,17 @@ abstract class FileInfo {
 
   long getWriteSize() {
     throw new UnsupportedOperationException(
-        "File " + getRelativePath() + " size is unknown.");
+        "File " + getRelativePath() + " writeSize is unknown.");
   }
 
   long getCommittedSize() {
     throw new UnsupportedOperationException(
-        "File " + getRelativePath() + " size is unknown.");
+        "File " + getRelativePath() + " committedSize is unknown.");
+  }
+
+  boolean hasFile() {
+    throw new UnsupportedOperationException(
+        "File " + getRelativePath() + " hasFile is unknown.");
   }
 
   ByteString read(CheckedFunction<Path, Path, IOException> resolver, long offset, long length, boolean readCommitted)
@@ -77,6 +83,10 @@ abstract class FileInfo {
       throw new IOException("Failed to read Wrote: offset (=" + offset
           + " + length (=" + length + ") > size = " + getWriteSize()
           + ", path=" + getRelativePath());
+    }
+
+    if (length == 0) {
+      return ByteString.EMPTY;
     }
 
     try(SeekableByteChannel in = Files.newByteChannel(
@@ -114,11 +124,13 @@ abstract class FileInfo {
   static class ReadOnly extends FileInfo {
     private final long committedSize;
     private final long writeSize;
+    private final boolean hasFile;
 
     ReadOnly(UnderConstruction f) {
       super(f.getRelativePath());
       this.committedSize = f.getCommittedSize();
       this.writeSize = f.getWriteSize();
+      this.hasFile = f.hasFile();
     }
 
     @Override
@@ -129,6 +141,11 @@ abstract class FileInfo {
     @Override
     long getWriteSize() {
       return writeSize;
+    }
+
+    @Override
+    boolean hasFile() {
+      return hasFile;
     }
   }
 
@@ -160,12 +177,12 @@ abstract class FileInfo {
   }
 
   static class UnderConstruction extends FileInfo {
-    private FileStore.FileStoreDataChannel out;
+    private final MemoizedCheckedSupplier<FileStore.FileStoreDataChannel, IOException> channel;
 
     /** The size written to a local file. */
     private volatile long writeSize;
     /** The size committed to client. */
-    private volatile long committedSize;
+    private final AtomicLong committedSize = new AtomicLong();
 
     /** A queue to make sure that the writes are in order. */
     private final TaskQueue writeQueue = new TaskQueue("writeQueue");
@@ -173,8 +190,9 @@ abstract class FileInfo {
 
     private final AtomicLong lastWriteIndex = new AtomicLong(-1L);
 
-    UnderConstruction(Path relativePath) {
+    UnderConstruction(Path relativePath, CheckedSupplier<FileStore.FileStoreDataChannel, IOException> supplyChannel) {
       super(relativePath);
+      this.channel = MemoizedCheckedSupplier.valueOf(supplyChannel);
     }
 
     @Override
@@ -184,7 +202,7 @@ abstract class FileInfo {
 
     @Override
     long getCommittedSize() {
-      return committedSize;
+      return committedSize.get();
     }
 
     @Override
@@ -192,15 +210,21 @@ abstract class FileInfo {
       return writeSize;
     }
 
+    @Override
+    boolean hasFile() {
+      return channel.isInitialized();
+    }
+
     CompletableFuture<Integer> submitCreate(
-        CheckedFunction<Path, Path, IOException> resolver, ByteString data, boolean close, boolean sync,
-        ExecutorService executor, RaftPeerId id, long index) {
+        ByteString data, boolean close, boolean sync,
+        ExecutorService executor, RaftPeerId id, long index, boolean skipEmptyFile) {
       final Supplier<String> name = () -> "create(" + getRelativePath() + ", "
           + close + ") @" + id + ":" + index;
       final CheckedSupplier<Integer, IOException> task = LogUtils.newCheckedSupplier(LOG, () -> {
-        if (out == null) {
-          out = new FileStore.FileStoreDataChannel(resolver.apply(getRelativePath()));
+        if (data.isEmpty() && skipEmptyFile) {
+          return 0;
         }
+        channel.get();
         return write(0L, data, close, sync);
       }, name);
       return submitWrite(task, executor, id, index);
@@ -238,13 +262,14 @@ abstract class FileInfo {
         throw new IOException("Offset/size mismatched: offset = " + offset
             + " != writeSize = " + writeSize + ", path=" + getRelativePath());
       }
-      if (out == null) {
+      if (!channel.isInitialized()) {
         throw new IOException("File output is not initialized, path=" + getRelativePath());
       }
 
+      final FileStore.FileStoreDataChannel out = channel.get();
       synchronized (out) {
         int n = 0;
-        if (data != null) {
+        if (data != null && !data.isEmpty()) {
           final ByteBuffer buffer = data.asReadOnlyByteBuffer();
           try {
             for (; buffer.remaining() > 0; ) {
@@ -280,15 +305,18 @@ abstract class FileInfo {
       }
 
       final CheckedSupplier<Integer, IOException> task = LogUtils.newCheckedSupplier(LOG, () -> {
-        if (offset != committedSize) {
-          throw new IOException("Offset/size mismatched: offset = "
-              + offset + " != committedSize = " + committedSize
+        final long oldCommittedSize = getCommittedSize();
+        if (offset != oldCommittedSize) {
+          throw new IOException("Offset/size mismatched: offset = " + offset
+              + " != committedSize = " + oldCommittedSize
               + ", path=" + getRelativePath());
-        } else if (committedSize + size > writeSize) {
-          throw new IOException("Offset/size mismatched: committed (=" + committedSize
+        }
+        final long newCommittedSize = oldCommittedSize + size;
+        if (newCommittedSize > writeSize) {
+          throw new IOException("Offset/size mismatched: committed (=" + oldCommittedSize
               + ") + size (=" + size + ") > writeSize = " + writeSize);
         }
-        committedSize += size;
+        committedSize.compareAndSet(oldCommittedSize, newCommittedSize);
 
         if (close) {
           ReadOnly ignored = closeFunction.apply(this);

@@ -51,6 +51,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * Client to connect filestore example cluster.
@@ -179,15 +180,21 @@ public abstract class Client extends SubCommandBase {
     return future;
   }
 
-  protected List<String> generateFiles(ExecutorService executor) {
-    UUID uuid = UUID.randomUUID();
+  protected List<String> generatePaths() {
+    final UUID uuid = UUID.randomUUID();
     List<String> paths = new ArrayList<>();
-    List<CompletableFuture<Long>> futures = new ArrayList<>();
     for (int i = 0; i < numFiles; i ++) {
       String path = getPath("file-" + uuid + "-" + i);
       paths.add(path);
-      futures.add(writeFileAsync(path, executor));
     }
+    return paths;
+  }
+
+  protected List<String> generateFiles(ExecutorService executor) {
+    final List<String> paths = generatePaths();
+    final List<CompletableFuture<Long>> futures = paths.stream()
+        .map(p -> writeFileAsync(p, executor))
+        .collect(Collectors.toList());
 
     for (int i = 0; i < futures.size(); i ++) {
       long size = futures.get(i).join();

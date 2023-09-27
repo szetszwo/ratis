@@ -36,6 +36,7 @@ import org.apache.ratis.protocol.RaftPeer;
 import org.apache.ratis.protocol.RoutingTable;
 import org.apache.ratis.protocol.exceptions.StateMachineException;
 import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
+import org.apache.ratis.thirdparty.com.google.protobuf.Empty;
 import org.apache.ratis.util.JavaUtils;
 import org.apache.ratis.util.Preconditions;
 import org.apache.ratis.util.ProtoUtils;
@@ -186,6 +187,10 @@ public class FileStoreClient implements Closeable {
     return client.getDataStreamApi().stream(request.toByteString().asReadOnlyByteBuffer(), routingTable);
   }
 
+  public CompletableFuture<Long> writeAsync(String path) {
+    return writeAsync(path, 0L, true, ByteString.EMPTY.asReadOnlyByteBuffer(), false);
+  }
+
   public CompletableFuture<Long> writeAsync(String path, long offset, boolean close, ByteBuffer buffer, boolean sync) {
     return writeImpl(this::sendAsync, path, offset, close, buffer, sync
     ).thenApply(reply -> JavaUtils.supplyAndWrapAsCompletionException(
@@ -196,16 +201,17 @@ public class FileStoreClient implements Closeable {
       CheckedFunction<Message, OUTPUT, THROWABLE> sendFunction,
       String path, long offset, boolean close, ByteBuffer data, boolean sync)
       throws THROWABLE {
+    final int length = data.remaining();
     final WriteRequestHeaderProto.Builder header = WriteRequestHeaderProto.newBuilder()
         .setPath(ProtoUtils.toByteString(path))
         .setOffset(offset)
-        .setLength(data.remaining())
+        .setLength(length)
         .setClose(close)
         .setSync(sync);
 
     final WriteRequestProto.Builder write = WriteRequestProto.newBuilder()
         .setHeader(header)
-        .setData(ByteString.copyFrom(data));
+        .setData(length == 0? ByteString.EMPTY: ByteString.copyFrom(data));
 
     final FileStoreRequestProto request = FileStoreRequestProto.newBuilder().setWrite(write).build();
     return sendFunction.apply(Message.valueOf(request));

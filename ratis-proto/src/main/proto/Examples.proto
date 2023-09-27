@@ -43,6 +43,7 @@ message WriteRequestHeaderProto {
   uint64 offset = 3;
   uint64 length = 4;
   bool sync = 5;
+  bool skipEmptyFile = 6;
 }
 
 message StreamWriteRequestProto {

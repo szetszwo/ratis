@@ -21,14 +21,12 @@ package org.apache.ratis.examples.common;
 import org.apache.ratis.protocol.RaftGroup;
 import org.apache.ratis.protocol.RaftGroupId;
 import org.apache.ratis.protocol.RaftPeer;
+import org.apache.ratis.util.FileUtils;
 import org.apache.ratis.util.TimeDuration;
 
 import java.io.BufferedReader;
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -52,10 +50,9 @@ public final class Constants {
   static {
     final Properties properties = new Properties();
     final String conf = "ratis-examples/src/main/resources/conf.properties";
-    try(InputStream inputStream = new FileInputStream(conf);
-        Reader reader = new InputStreamReader(inputStream, StandardCharsets.UTF_8);
-        BufferedReader bufferedReader = new BufferedReader(reader)) {
-      properties.load(bufferedReader);
+    try(BufferedReader in = new BufferedReader(new InputStreamReader(
+        FileUtils.newInputStream(conf), StandardCharsets.UTF_8))) {
+      properties.load(in);
     } catch (IOException e) {
       throw new IllegalStateException("Failed to load " + conf, e);
     }

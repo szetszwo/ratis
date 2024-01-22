@@ -41,6 +41,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
@@ -389,7 +390,9 @@ public class SegmentedRaftLogCache {
 
     @Override
     public String toString() {
-      return name + ":" + segments;
+      try(AutoCloseableLock ignored = readLock()) {
+        return name + ":" + segments;
+      }
     }
   }
 
@@ -403,6 +406,17 @@ public class SegmentedRaftLogCache {
   private final int maxCachedSegments;
   private final CacheInvalidationPolicy evictionPolicy = new CacheInvalidationPolicyDefault();
   private final long maxSegmentCacheSize;
+
+
+  @Override
+  public String toString() {
+    try (AutoCloseableLock readLock = closedSegments.readLock()) {
+      return name + " for " + storage.getStorageDir().getRoot()
+          + "\n  last          : " + getLastTermIndex()
+          + "\n  openSegment   : " + openSegment
+          + "\n  closedSegments: " + closedSegments;
+    }
+  }
 
   SegmentedRaftLogCache(Object name, RaftStorage storage, RaftProperties properties,
       SegmentedRaftLogMetrics raftLogMetrics) {
@@ -601,14 +615,25 @@ public class SegmentedRaftLogCache {
     // SegmentedRaftLog does the segment creation/rolling work. Here we just
     // simply append the entry into the open segment.
     Preconditions.assertNotNull(openSegment, "openSegment");
+    LOG.info("XXX {} {}: append {}", name, op, LogProtoUtils.toLogEntryString(entry.retain()));
+    if (truncated.compareAndSet(true, false)) {
+      LOG.info("", new Throwable("TRACE"));
+    }
     openSegment.appendToOpenSegment(op, entry);
   }
+
+  private final AtomicBoolean truncated = new AtomicBoolean();
 
   /**
    * truncate log entries starting from the given index (inclusive)
    */
   TruncationSegments truncate(long index) {
-    return closedSegments.truncate(index, openSegment, this::clearOpenSegment);
+    LOG.info("XXX truncate to {}: {}", index, this);
+    final TruncationSegments truncation = closedSegments.truncate(index, openSegment, this::clearOpenSegment);
+    LOG.info("XXX truncated to {}: {}", index, this);
+    LOG.info("XXX truncation: {}", truncation);
+    truncated.set(true);
+    return truncation;
   }
 
   TruncationSegments purge(long index) {

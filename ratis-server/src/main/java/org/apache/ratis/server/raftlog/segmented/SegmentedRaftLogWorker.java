@@ -26,6 +26,7 @@ import org.apache.ratis.protocol.exceptions.TimeoutIOException;
 import org.apache.ratis.server.RaftServer;
 import org.apache.ratis.server.RaftServerConfigKeys;
 import org.apache.ratis.server.metrics.SegmentedRaftLogMetrics;
+import org.apache.ratis.server.protocol.TermIndex;
 import org.apache.ratis.server.raftlog.LogProtoUtils;
 import org.apache.ratis.server.raftlog.RaftLog;
 import org.apache.ratis.server.raftlog.RaftLogIOException;
@@ -149,10 +150,7 @@ class SegmentedRaftLogWorker {
   private final SegmentedRaftLogMetrics raftLogMetrics;
   private final ByteBuffer writeBuffer;
 
-  /**
-   * The number of entries that have been written into the SegmentedRaftLogOutputStream but
-   * has not been flushed.
-   */
+  /** The number of entries written but not yet flushed. */
   private int pendingFlushNum = 0;
   /** the index of the last entry that has been written */
   private long lastWrittenIndex;
@@ -304,6 +302,7 @@ class SegmentedRaftLogWorker {
               throw logIOException;
             } else {
               try (UncheckedAutoCloseable ignored = raftLogMetrics.startTaskExecutionTimer(task.getClass())) {
+                LOG.info("XXX execute {}", task);
                 task.execute();
               }
             }
@@ -442,9 +441,9 @@ class SegmentedRaftLogWorker {
     return addIOTask(new WriteLog(entry, removedStateMachineData, context));
   }
 
-  Task truncate(TruncationSegments ts, long index) {
+  Task truncate(TruncationSegments ts, long index, SegmentedRaftLog raftLog) {
     LOG.info("{}: Truncating segments {}, start index {}", name, ts, index);
-    return addIOTask(new TruncateLog(ts, index));
+    return addIOTask(new TruncateLog(ts, index, raftLog));
   }
 
   void closeLogSegment(LogSegment segmentToClose) {
@@ -570,7 +569,7 @@ class SegmentedRaftLogWorker {
     private final long endIndex;
 
     FinalizeLogSegment(LogSegment segmentToClose) {
-      Preconditions.assertTrue(segmentToClose != null, "Log segment to be rolled is null");
+      Objects.requireNonNull(segmentToClose, "segmentToClose");
       this.startIndex = segmentToClose.getStartIndex();
       this.endIndex = segmentToClose.getEndIndex();
     }
@@ -641,10 +640,12 @@ class SegmentedRaftLogWorker {
   }
 
   private class TruncateLog extends Task {
+    private final SegmentedRaftLog raftLog;
     private final TruncationSegments segments;
     private CompletableFuture<Void> stateMachineFuture = null;
 
-    TruncateLog(TruncationSegments ts, long index) {
+    TruncateLog(TruncationSegments ts, long index, SegmentedRaftLog raftLog) {
+      this.raftLog = raftLog;
       this.segments = ts;
       if (stateMachine != null) {
         // TruncateLog and WriteLog instance is created while taking a RaftLog write lock.
@@ -699,6 +700,12 @@ class SegmentedRaftLogWorker {
       flushIndex.setUnconditionally(lastWrittenIndex, infoIndexChange);
       safeCacheEvictIndex.setUnconditionally(lastWrittenIndex, infoIndexChange);
       postUpdateFlushedIndex(0);
+
+      final TermIndex lastEntry = raftLog.getLastEntryTermIndex();
+      if (lastEntry.getIndex() != lastWrittenIndex) {
+        LOG.info("XXX truncate not working: lastEntry={}, lastWrittenIndex={}", lastEntry, lastWrittenIndex);
+        raftLog.getStateMachineLogEntries(System.out::println);
+      }
     }
 
     @Override

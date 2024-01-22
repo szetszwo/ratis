@@ -297,6 +297,28 @@ public final class SegmentedRaftLog extends RaftLogBase {
     return segment.loadCache(record);
   }
 
+  public List<LogEntryProto> getStateMachineLogEntries(Consumer<String> print) throws RaftLogIOException {
+    final List<LogEntryProto> entries = new ArrayList<>();
+    for (LogEntryHeader header : getEntries(0, getLastEntryTermIndex().getIndex() + 1)) {
+      final LogEntryProto e = get(header.getIndex());
+      if (e == null) {
+        break;
+      }
+      final String s = LogProtoUtils.toLogEntryString(e);
+      if (e.hasStateMachineLogEntry()) {
+        print.accept(entries.size() + ") " + s);
+        entries.add(e);
+      } else if (e.hasConfigurationEntry()) {
+        print.accept("Ignoring " + s);
+      } else if (e.hasMetadataEntry()) {
+        print.accept("Ignoring " + s);
+      } else {
+        throw new AssertionError("Unexpected LogEntryBodyCase " + e.getLogEntryBodyCase() + " at " + s);
+      }
+    }
+    return entries;
+  }
+
   @Override
   public EntryWithData getEntryWithData(long index) throws RaftLogIOException {
     final LogEntryProto entry = get(index);
@@ -363,10 +385,11 @@ public final class SegmentedRaftLog extends RaftLogBase {
   protected CompletableFuture<Long> truncateImpl(long index) {
     checkLogState();
     try(AutoCloseableLock writeLock = writeLock()) {
+      LOG.info("XXX truncate to {}: last {}, {}", index, getLastEntryTermIndex(), this);
       SegmentedRaftLogCache.TruncationSegments ts = cache.truncate(index);
+      Preconditions.assertSame(index - 1, cache.getEndIndex(), "cache endIndex");
       if (ts != null) {
-        Task task = fileLogWorker.truncate(ts, index);
-        return task.getFuture();
+        return fileLogWorker.truncate(ts, index, this).getFuture();
       }
     }
     return CompletableFuture.completedFuture(index);

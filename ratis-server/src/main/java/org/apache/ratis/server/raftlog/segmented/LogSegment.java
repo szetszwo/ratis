@@ -83,17 +83,20 @@ public final class LogSegment {
         throw new IllegalStateException("Unexpected op " + op + ", entry=" + entry);
     }
     final int serialized = entry.getSerializedSize();
-    return serialized + CodedOutputStream.computeUInt32SizeNoTag(serialized) + 4L;
+    return serialized + 4L + CodedOutputStream.computeUInt32SizeNoTag(serialized);
   }
 
   static class LogRecord {
+    private final LogEntryHeader logEntryHeader;
     /** starting offset in the file */
     private final long offset;
-    private final LogEntryHeader logEntryHeader;
+    /** The size of the {@link LogEntryProto}. */
+    private final long size;
 
-    LogRecord(long offset, LogEntryProto entry) {
-      this.offset = offset;
+    LogRecord(LogEntryProto entry, long offset, long size) {
       this.logEntryHeader = LogEntryHeader.valueOf(entry);
+      this.offset = offset;
+      this.size = size;
     }
 
     LogEntryHeader getLogEntryHeader() {
@@ -106,6 +109,55 @@ public final class LogSegment {
 
     long getOffset() {
       return offset;
+    }
+
+    long getSize() {
+      return size;
+    }
+  }
+
+  static class LogRecordList {
+    private final List<LogRecord> list = new ArrayList<>();
+
+    LogRecord get(int i) {
+      return list.get(i);
+    }
+
+    LogRecord getLast() {
+      return list.isEmpty() ? null : list.get(list.size() - 1);
+    }
+
+    int size() {
+      return list.size();
+    }
+
+    void clear() {
+      list.clear();
+    }
+
+    private LogRecord append(LogEntryProto entry, long offset, long size, long startIndex) {
+      Objects.requireNonNull(entry, "entry == null");
+      if (list.isEmpty()) {
+        Preconditions.assertTrue(entry.getIndex() == startIndex,
+            "Gap between entry index %s and start index %s", entry.getIndex(), startIndex);
+      }
+
+      final LogRecord last = getLast();
+      if (last != null) {
+        Preconditions.assertTrue(entry.getIndex() == last.getTermIndex().getIndex() + 1,
+            "Gap between entry index %s and last record %s", entry.getIndex(), last.getTermIndex());
+        Preconditions.assertSame(last.getOffset() + last.getSize(), offset, "offset");
+      }
+
+      final LogRecord record = new LogRecord(entry, offset, size);
+      list.add(record);
+      return record;
+    }
+
+    LogRecord removeLast(int index) {
+      // allow only removing the last record
+      Preconditions.assertSame(list.size() - 1, index, "last-index");
+      return list.remove(index);
     }
   }
 
@@ -200,7 +252,7 @@ public final class LogSegment {
     return segment;
   }
 
-  private void assertSegment(long expectedStart, int expectedEntryCount, boolean corrupted, long expectedEnd) {
+  private synchronized void assertSegment(long expectedStart, int expectedEntryCount, boolean corrupted, long expectedEnd) {
     Preconditions.assertSame(expectedStart, getStartIndex(), "Segment start index");
     Preconditions.assertSame(expectedEntryCount, records.size(), "Number of records");
 
@@ -294,22 +346,18 @@ public final class LogSegment {
   private volatile boolean isOpen;
   private long totalFileSize = SegmentedRaftLogFormat.getHeaderLength();
   /** Segment start index, inclusive. */
-  private long startIndex;
+  private final long startIndex;
   /** Segment end index, inclusive. */
   private volatile long endIndex;
-  private RaftStorage storage;
+  private final RaftStorage storage;
   private final SizeInBytes maxOpSize;
   private final LogEntryLoader cacheLoader;
   /** later replace it with a metric */
   private final AtomicInteger loadingTimes = new AtomicInteger();
 
-  /**
-   * the list of records is more like the index of a segment
-   */
-  private final List<LogRecord> records = new ArrayList<>();
-  /**
-   * the entryCache caches the content of log entries.
-   */
+  /** Records ({@link LogEntryHeader}) of this segment. */
+  private final LogRecordList records = new LogRecordList();
+  /** Caching {@link LogEntryProto}. */
   private final EntryCache entryCache = new EntryCache();
 
   private LogSegment(RaftStorage storage, boolean isOpen, long start, long end, SizeInBytes maxOpSize,
@@ -347,11 +395,15 @@ public final class LogSegment {
     append(op, entryRef, true, null);
   }
 
-  private void append(Op op, ReferenceCountedObject<LogEntryProto> entryRef,
+  private synchronized void append(Op op, ReferenceCountedObject<LogEntryProto> entryRef,
       boolean keepEntryInCache, Consumer<LogEntryProto> logConsumer) {
     final LogEntryProto entry = entryRef.retain();
     try {
-      final LogRecord record = appendLogRecord(op, entry);
+      final long size = getEntrySize(entry, op);
+      final LogRecord record = records.append(entry, totalFileSize, size, startIndex);
+      totalFileSize += size;
+      endIndex = entry.getIndex();
+
       if (keepEntryInCache) {
         putEntryCache(record.getTermIndex(), entryRef, op);
       }
@@ -361,28 +413,6 @@ public final class LogSegment {
     } finally {
       entryRef.release();
     }
-  }
-
-
-  private LogRecord appendLogRecord(Op op, LogEntryProto entry) {
-    Objects.requireNonNull(entry, "entry == null");
-    if (records.isEmpty()) {
-      Preconditions.assertTrue(entry.getIndex() == startIndex,
-          "gap between start index %s and first entry to append %s",
-          startIndex, entry.getIndex());
-    }
-
-    final LogRecord currentLast = getLastRecord();
-    if (currentLast != null) {
-      Preconditions.assertTrue(entry.getIndex() == currentLast.getTermIndex().getIndex() + 1,
-          "gap between entries %s and %s", entry.getIndex(), currentLast.getTermIndex().getIndex());
-    }
-
-    final LogRecord record = new LogRecord(totalFileSize, entry);
-    records.add(record);
-    totalFileSize += getEntrySize(entry, op);
-    endIndex = entry.getIndex();
-    return record;
   }
 
   LogEntryProto getEntryFromCache(TermIndex ti) {
@@ -404,15 +434,15 @@ public final class LogSegment {
     }
   }
 
-  LogRecord getLogRecord(long index) {
+  synchronized LogRecord getLogRecord(long index) {
     if (index >= startIndex && index <= endIndex) {
       return records.get(Math.toIntExact(index - startIndex));
     }
     return null;
   }
 
-  private LogRecord getLastRecord() {
-    return records.isEmpty() ? null : records.get(records.size() - 1);
+  private synchronized LogRecord getLastRecord() {
+    return records.getLast();
   }
 
   TermIndex getLastTermIndex() {
@@ -432,14 +462,21 @@ public final class LogSegment {
    * Remove records from the given index (inclusive)
    */
   synchronized void truncate(long fromIndex) {
-    Preconditions.assertTrue(fromIndex >= startIndex && fromIndex <= endIndex);
+    Preconditions.assertTrue(fromIndex > startIndex,
+        () -> "fromIndex = " + fromIndex + " <= " + startIndex + " = startIndex");
+    Preconditions.assertTrue(fromIndex <= endIndex,
+        () -> "fromIndex = " + fromIndex + " > " + endIndex + " = endIndex");
+
+    final String before = this + " (endIndex=" + endIndex + ")";
     for (long index = endIndex; index >= fromIndex; index--) {
-      LogRecord removed = records.remove(Math.toIntExact(index - startIndex));
+      final LogRecord removed = records.removeLast(Math.toIntExact(index - startIndex));
       removeEntryCache(removed.getTermIndex());
-      totalFileSize = removed.offset;
+      Preconditions.assertSame(removed.getOffset() + removed.getSize(), totalFileSize, "totalFileSize");
+      totalFileSize = removed.getOffset();
     }
     isOpen = false;
     this.endIndex = fromIndex - 1;
+    LOG.info("truncate {} fromIndex {} -> {}", before, fromIndex, this);
   }
 
   void close() {
@@ -449,7 +486,7 @@ public final class LogSegment {
 
   @Override
   public String toString() {
-    return isOpen() ? "log_" + "inprogress_" + startIndex :
+    return isOpen() ? "log_inprogress_" + startIndex :
         "log-" + startIndex + "_" + endIndex;
   }
 

@@ -29,6 +29,7 @@ import java.lang.management.ThreadMXBean;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.text.SimpleDateFormat;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Date;
 import java.util.Objects;
@@ -196,6 +197,16 @@ public interface JavaUtils {
     return ROOT_THREAD_GROUP.get();
   }
 
+  static boolean equals(Throwable left, Throwable right) {
+    if (left == right) {
+      return true;
+    } else if (left == null || right == null) {
+      return false;
+    }
+    return Objects.equals(left.getMessage(), right.getMessage())
+        && Arrays.equals(left.getStackTrace(), right.getStackTrace());
+  }
+
   /** Attempt to get a return value from the given supplier multiple times. */
   static <RETURN, THROWABLE extends Throwable> RETURN attemptRepeatedly(
       CheckedSupplier<RETURN, THROWABLE> supplier,
@@ -220,6 +231,7 @@ public interface JavaUtils {
     Preconditions.assertTrue(numAttempts > 0, () -> "numAttempts = " + numAttempts + " <= 0");
     Preconditions.assertTrue(!sleepTime.isNegative(), () -> "sleepTime = " + sleepTime + " < 0");
 
+    Throwable previous = null;
     for(int i = 1; i <= numAttempts; i++) {
       try {
         return attemptMethod.apply(i);
@@ -228,8 +240,14 @@ public interface JavaUtils {
           throw t;
         }
         if (log != null && log.isWarnEnabled()) {
-          log.warn("FAILED \"" + name.get() + "\", attempt #" + i + "/" + numAttempts
-              + ": " + t + ", sleep " + sleepTime + " and then retry.", t);
+          final String message = "FAILED \"" + name.get() + "\", attempt #" + i + "/" + numAttempts
+              + ": " + t + ", sleep " + sleepTime + " and then retry.";
+          if (equals(t, previous)) {
+            log.warn(message + " " + t);
+          } else {
+            log.warn(message, t);
+          }
+          previous = t;
         }
       }
 
@@ -244,19 +262,6 @@ public interface JavaUtils {
       throws THROWABLE, InterruptedException {
     attemptRepeatedly(CheckedRunnable.asCheckedSupplier(runnable), numAttempts, sleepTime, name, log);
   }
-
-  /** Attempt to wait the given condition to return true multiple times. */
-  static void attemptUntilTrue(
-      BooleanSupplier condition, int numAttempts, TimeDuration sleepTime, String name, Logger log)
-      throws InterruptedException {
-    Objects.requireNonNull(condition, "condition == null");
-    attempt(() -> {
-      if (!condition.getAsBoolean()) {
-        throw new IllegalStateException("Condition " + name + " is false.");
-      }
-    }, numAttempts, sleepTime, name, log);
-  }
-
 
   static Timer runRepeatedly(Runnable runnable, long delay, long period, TimeUnit unit) {
     final Timer timer = new Timer(true);

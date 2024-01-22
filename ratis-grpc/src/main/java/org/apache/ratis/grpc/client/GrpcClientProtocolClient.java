@@ -55,6 +55,7 @@ import org.apache.ratis.thirdparty.io.grpc.netty.NettyChannelBuilder;
 import org.apache.ratis.thirdparty.io.grpc.stub.StreamObserver;
 import org.apache.ratis.thirdparty.io.netty.handler.ssl.SslContextBuilder;
 import org.apache.ratis.util.CollectionUtils;
+import org.apache.ratis.util.IOUtils;
 import org.apache.ratis.util.JavaUtils;
 import org.apache.ratis.util.SizeInBytes;
 import org.apache.ratis.util.TimeDuration;
@@ -91,9 +92,7 @@ public class GrpcClientProtocolClient implements Closeable {
   private final RaftClientProtocolServiceStub asyncStub;
   private final AdminProtocolServiceBlockingStub adminBlockingStub;
 
-  private final AtomicReference<AsyncStreamObservers> orderedStreamObservers = new AtomicReference<>();
-
-  private final AtomicReference<AsyncStreamObservers> unorderedStreamObservers = new AtomicReference<>();
+  private final OrderedAndUnordered orderedAndUnordered = new OrderedAndUnordered();
   private final MetricClientInterceptor metricClientInterceptor;
 
   GrpcClientProtocolClient(ClientId id, RaftPeer target, RaftProperties properties,
@@ -120,8 +119,7 @@ public class GrpcClientProtocolClient implements Closeable {
     asyncStub = RaftClientProtocolServiceGrpc.newStub(clientChannel);
     adminBlockingStub = AdminProtocolServiceGrpc.newBlockingStub(adminChannel);
     this.requestTimeoutDuration = RaftClientConfigKeys.Rpc.requestTimeout(properties);
-    this.watchRequestTimeoutDuration =
-        RaftClientConfigKeys.Rpc.watchRequestTimeout(properties);
+    this.watchRequestTimeoutDuration = RaftClientConfigKeys.Rpc.watchRequestTimeout(properties);
   }
 
   private ManagedChannel buildChannel(String address, GrpcTlsConfig tlsConf,
@@ -157,8 +155,11 @@ public class GrpcClientProtocolClient implements Closeable {
 
   @Override
   public void close() {
-    Optional.ofNullable(orderedStreamObservers.getAndSet(null)).ifPresent(AsyncStreamObservers::close);
-    Optional.ofNullable(unorderedStreamObservers.getAndSet(null)).ifPresent(AsyncStreamObservers::close);
+    LOG.info("XXX close {}", this);
+    if (!orderedAndUnordered.close()) {
+      return; // already closed
+    }
+
     GrpcUtil.shutdownManagedChannel(clientChannel);
     if (clientChannel != adminChannel) {
       GrpcUtil.shutdownManagedChannel(adminChannel);
@@ -233,14 +234,12 @@ public class GrpcClientProtocolClient implements Closeable {
         .unordered(responseHandler);
   }
 
-  AsyncStreamObservers getOrderedStreamObservers() {
-    return orderedStreamObservers.updateAndGet(
-        a -> a != null? a : new AsyncStreamObservers(this::ordered));
+  AsyncStreamObservers getOrderedStreamObservers() throws AlreadyClosedException {
+    return orderedAndUnordered.getOrderedStreamObservers();
   }
 
-  AsyncStreamObservers getUnorderedAsyncStreamObservers() {
-    return unorderedStreamObservers.updateAndGet(
-        a -> a != null? a : new AsyncStreamObservers(asyncStub::unordered));
+  synchronized AsyncStreamObservers getUnorderedAsyncStreamObservers() throws AlreadyClosedException {
+    return orderedAndUnordered.getUnorderedAsyncStreamObservers();
   }
 
   public RaftPeer getTarget() {
@@ -297,49 +296,54 @@ public class GrpcClientProtocolClient implements Closeable {
     }
   }
 
-  class AsyncStreamObservers {
+  class OrderedAndUnordered {
+    private AsyncStreamObservers orderedStreamObservers;
+    private AsyncStreamObservers unorderedStreamObservers;
+    private boolean isClosed;
+
+    synchronized AsyncStreamObservers getOrderedStreamObservers() throws AlreadyClosedException {
+      if (isClosed) {
+        throw new AlreadyClosedException(this + " is already closed.");
+      }
+      if (orderedStreamObservers == null) {
+        orderedStreamObservers = new AsyncStreamObservers("orderedStreamObservers", asyncStub::ordered);
+      }
+      return orderedStreamObservers;
+    }
+
+    synchronized AsyncStreamObservers getUnorderedAsyncStreamObservers() throws AlreadyClosedException {
+      if (isClosed) {
+        throw new AlreadyClosedException(this + " is already closed.");
+      }
+      if (unorderedStreamObservers == null) {
+        unorderedStreamObservers = new AsyncStreamObservers("unorderedStreamObservers", asyncStub::unordered);
+      }
+      return unorderedStreamObservers;
+    }
+
+    /**
+     * @return true iff this call results closing the underlying objects;
+     *         otherwise, this is already closed, return false.
+     */
+    synchronized boolean close() {
+      if (isClosed) {
+        return false;
+      }
+      isClosed = true;
+      IOUtils.cleanup(LOG, orderedStreamObservers, unorderedStreamObservers);
+      return true;
+    }
+  }
+
+  class AsyncStreamObservers implements Closeable {
+    private final String name;
     /** Request map: callId -> future */
     private final ReplyMap replies = new ReplyMap();
-
-    private final StreamObserver<RaftClientReplyProto> replyStreamObserver
-        = new StreamObserver<RaftClientReplyProto>() {
-      @Override
-      public void onNext(RaftClientReplyProto proto) {
-        final long callId = proto.getRpcReply().getCallId();
-        try {
-          final RaftClientReply reply = ClientProtoUtils.toRaftClientReply(proto);
-          LOG.trace("{}: receive {}", getName(), reply);
-          final NotLeaderException nle = reply.getNotLeaderException();
-          if (nle != null) {
-            completeReplyExceptionally(nle, NotLeaderException.class.getName());
-            return;
-          }
-          final LeaderNotReadyException lnre = reply.getLeaderNotReadyException();
-          if (lnre != null) {
-            completeReplyExceptionally(lnre, LeaderNotReadyException.class.getName());
-            return;
-          }
-          handleReplyFuture(callId, f -> f.complete(reply));
-        } catch (Exception e) {
-          handleReplyFuture(callId, f -> f.completeExceptionally(e));
-        }
-      }
-
-      @Override
-      public void onError(Throwable t) {
-        final IOException ioe = GrpcUtil.unwrapIOException(t);
-        completeReplyExceptionally(ioe, "onError");
-      }
-
-      @Override
-      public void onCompleted() {
-        completeReplyExceptionally(null, "completed");
-      }
-    };
     private final RequestStreamer requestStreamer;
 
-    AsyncStreamObservers(Function<StreamObserver<RaftClientReplyProto>, StreamObserver<RaftClientRequestProto>> f) {
-      this.requestStreamer = new RequestStreamer(f.apply(replyStreamObserver));
+    AsyncStreamObservers(String suffix, Function<StreamObserver<RaftClientReplyProto>, StreamObserver<RaftClientRequestProto>> f) {
+      this.name = getName() + "-" + suffix;
+      this.requestStreamer = new RequestStreamer(f.apply(new ReplyStreamObserver()));
     }
 
     CompletableFuture<RaftClientReply> onNext(RaftClientRequest request) {
@@ -378,7 +382,8 @@ public class GrpcClientProtocolClient implements Closeable {
       replies.remove(callId).ifPresent(handler);
     }
 
-    private void close() {
+    @Override
+    public void close() {
       requestStreamer.onCompleted();
       completeReplyExceptionally(null, "close");
     }
@@ -397,5 +402,50 @@ public class GrpcClientProtocolClient implements Closeable {
         }
       }
     }
+
+    @Override
+    public String toString() {
+      return name;
+    }
+
+    class ReplyStreamObserver implements StreamObserver<RaftClientReplyProto> {
+      @Override
+      public void onNext(RaftClientReplyProto proto) {
+        final long callId = proto.getRpcReply().getCallId();
+        try {
+          final RaftClientReply reply = ClientProtoUtils.toRaftClientReply(proto);
+          LOG.trace("{}: receive {}", getName(), reply);
+          final NotLeaderException nle = reply.getNotLeaderException();
+          if (nle != null) {
+            completeReplyExceptionally(nle, NotLeaderException.class.getName());
+            return;
+          }
+          final LeaderNotReadyException lnre = reply.getLeaderNotReadyException();
+          if (lnre != null) {
+            completeReplyExceptionally(lnre, LeaderNotReadyException.class.getName());
+            return;
+          }
+          handleReplyFuture(callId, f -> f.complete(reply));
+        } catch (Exception e) {
+          handleReplyFuture(callId, f -> f.completeExceptionally(e));
+        }
+      }
+
+      @Override
+      public void onError(Throwable t) {
+        final IOException ioe = GrpcUtil.unwrapIOException(t);
+        completeReplyExceptionally(ioe, "onError");
+      }
+
+      @Override
+      public void onCompleted() {
+        completeReplyExceptionally(null, "completed");
+      }
+    }
+  }
+
+  @Override
+  public String toString() {
+    return name.get();
   }
 }

@@ -344,6 +344,7 @@ message DataStreamPacketHeaderProto {
   enum Option {
     SYNC = 0;
     CLOSE = 1;
+    READ = 2;
   }
 
   bytes clientId = 1;

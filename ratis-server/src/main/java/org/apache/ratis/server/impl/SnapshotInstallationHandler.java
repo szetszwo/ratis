@@ -221,8 +221,7 @@ class SnapshotInstallationHandler {
         // Check if snapshot index is already at par or ahead of the first
         // available log index of the Leader.
         final long snapshotIndex = state.getLog().getSnapshotIndex();
-        if (snapshotIndex != INVALID_LOG_INDEX && snapshotIndex + 1 >= firstAvailableLogIndex &&
-            firstAvailableLogIndex > INVALID_LOG_INDEX) {
+        if (snapshotIndex + 1 >= firstAvailableLogIndex && firstAvailableLogIndex > INVALID_LOG_INDEX) {
           // State Machine has already installed the snapshot. Return the
           // latest snapshot index to the Leader.
 

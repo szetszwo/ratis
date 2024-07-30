@@ -263,7 +263,7 @@ public final class SegmentedRaftLog extends RaftLogBase {
       // not load the log to avoid holes between log segments. This may happen
       // when the local I/O worker is too slow to persist log (slower than
       // committing the log and taking snapshot)
-      if (!cache.isEmpty() && cache.getEndIndex() < lastIndexInSnapshot) {
+      if (cache.getNumOfSegments() > 0 && cache.getEndIndex() < lastIndexInSnapshot) {
         LOG.warn("End log index {} is smaller than last index in snapshot {}",
             cache.getEndIndex(), lastIndexInSnapshot);
         purgeImpl(lastIndexInSnapshot).whenComplete((purged, e) -> updatePurgeIndex(purged));
@@ -274,22 +274,18 @@ public final class SegmentedRaftLog extends RaftLogBase {
   @Override
   public LogEntryProto get(long index) throws RaftLogIOException {
     checkLogState();
-    final LogSegment segment;
-    final LogRecord record;
-    try (AutoCloseableLock readLock = readLock()) {
-      segment = cache.getSegment(index);
-      if (segment == null) {
-        return null;
-      }
-      record = segment.getLogRecord(index);
-      if (record == null) {
-        return null;
-      }
-      final LogEntryProto entry = segment.getEntryFromCache(record.getTermIndex());
-      if (entry != null) {
-        getRaftLogMetrics().onRaftLogCacheHit();
-        return entry;
-      }
+    final LogSegment segment = cache.getSegment(index);
+    if (segment == null) {
+      return null;
+    }
+    final LogRecord record = segment.getLogRecord(index);
+    if (record == null) {
+      return null;
+    }
+    final LogEntryProto entry = segment.getEntryFromCache(record.getTermIndex());
+    if (entry != null) {
+      getRaftLogMetrics().onRaftLogCacheHit();
+      return entry;
     }
 
     // the entry is not in the segment's cache. Load the cache without holding the lock.
@@ -339,26 +335,19 @@ public final class SegmentedRaftLog extends RaftLogBase {
   @Override
   public TermIndex getTermIndex(long index) {
     checkLogState();
-    try(AutoCloseableLock readLock = readLock()) {
-      LogRecord record = cache.getLogRecord(index);
-      return record != null ? record.getTermIndex() : null;
-    }
+    return cache.getTermIndex(index);
   }
 
   @Override
   public LogEntryHeader[] getEntries(long startIndex, long endIndex) {
     checkLogState();
-    try(AutoCloseableLock readLock = readLock()) {
-      return cache.getTermIndices(startIndex, endIndex);
-    }
+    return cache.getTermIndices(startIndex, endIndex);
   }
 
   @Override
   public TermIndex getLastEntryTermIndex() {
     checkLogState();
-    try(AutoCloseableLock readLock = readLock()) {
-      return cache.getLastTermIndex();
-    }
+    return cache.getLastTermIndex();
   }
 
   @Override

@@ -41,6 +41,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
@@ -220,6 +221,12 @@ public class SegmentedRaftLogCache {
       return segments.size();
     }
 
+    long getEndIndex() {
+      try (AutoCloseableLock ignored = readLock()) {
+        return isEmpty() ? RaftLog.INVALID_LOG_INDEX : get(size() - 1).getEndIndex();
+      }
+    }
+
     long getTotalFileSize() {
       return sizeInBytes;
     }
@@ -394,8 +401,7 @@ public class SegmentedRaftLogCache {
   }
 
   private final String name;
-  @SuppressWarnings({"squid:S3077"}) // Suppress volatile for generic type
-  private volatile LogSegment openSegment;
+  private final AtomicReference<LogSegment> openSegment = new AtomicReference<>();
   private final LogSegmentList closedSegments;
   private final RaftStorage storage;
   private final SizeInBytes maxOpSize;
@@ -441,7 +447,8 @@ public class SegmentedRaftLogCache {
   }
 
   long getOpenSegmentSizeInBytes() {
-    return openSegment == null ? 0 : openSegment.getTotalFileSize();
+    final LogSegment open = openSegment.get();
+    return open == null ? 0 : open.getTotalFileSize();
   }
 
   boolean shouldEvict() {
@@ -450,8 +457,8 @@ public class SegmentedRaftLogCache {
       return true;
     }
 
-    final long size = closedSegmentsCacheInfo.getSize()
-        + Optional.ofNullable(openSegment).map(LogSegment::getTotalCacheSize).orElse(0L);
+    final LogSegment open = openSegment.get();
+    final long size = closedSegmentsCacheInfo.getSize() + (open != null? open.getTotalCacheSize() : 0);
     return size > maxSegmentCacheSize;
   }
 
@@ -489,48 +496,54 @@ public class SegmentedRaftLogCache {
     setOpenSegment(LogSegment.newOpenSegment(storage, startIndex, maxOpSize, raftLogMetrics));
   }
 
-  private void setOpenSegment(LogSegment openSegment) {
-    LOG.trace("{}: setOpenSegment to {}", name, openSegment);
-    Preconditions.assertNull(this.openSegment, "this.openSegment");
-    this.openSegment = Objects.requireNonNull(openSegment);
+  private void setOpenSegment(LogSegment open) {
+    LOG.trace("{}: setOpenSegment to {}", name, open);
+    final LogSegment previous = openSegment.getAndSet(open);
+    Preconditions.assertNull(previous, "previous openSegment");
   }
 
-  private void clearOpenSegment() {
-    LOG.trace("{}: clearOpenSegment {}", name, openSegment);
-    Objects.requireNonNull(openSegment);
-    this.openSegment = null;
+  private void clearOpenSegment(LogSegment expected) {
+    Objects.requireNonNull(expected);
+    LOG.trace("{}: clearOpenSegment {}", name, expected);
+    final LogSegment previous = openSegment.getAndSet(null);
+    Preconditions.assertSame(expected, previous, "openSegment");
   }
 
   LogSegment getOpenSegment() {
-    return openSegment;
+    return openSegment.get();
   }
 
   /**
    * finalize the current open segment, and start a new open segment
    */
   void rollOpenSegment(boolean createNewOpen) {
-    Preconditions.assertTrue(openSegment != null && openSegment.numOfEntries() > 0,
-        () -> "The number of entries of " + openSegment + " is " + openSegment.numOfEntries());
-    final long nextIndex = openSegment.getEndIndex() + 1;
-    openSegment.close();
-    closedSegments.add(openSegment);
-    clearOpenSegment();
+    final LogSegment open = Objects.requireNonNull(openSegment.get(), "openSegment");
+    final int n = open.numOfEntries();
+    Preconditions.assertTrue(n > 0, () -> "The number of entries of " + open + " is " + n);
+    open.close();
+    closedSegments.add(open);
+    clearOpenSegment(open);
     if (createNewOpen) {
-      addOpenSegment(nextIndex);
+      addOpenSegment(open.getEndIndex() + 1);
     }
   }
 
   LogSegment getSegment(long index) {
-    if (openSegment != null && index >= openSegment.getStartIndex()) {
-      return openSegment;
+    final LogSegment open = openSegment.get();
+    if (open != null && index >= open.getStartIndex()) {
+      return open;
     } else {
       return closedSegments.search(index);
     }
   }
 
-  LogRecord getLogRecord(long index) {
-    LogSegment segment = getSegment(index);
-    return segment == null ? null : segment.getLogRecord(index);
+  TermIndex getTermIndex(long index) {
+    final LogSegment segment = getSegment(index);
+    if (segment == null) {
+      return null;
+    }
+    final LogRecord record = segment.getLogRecord(index);
+    return record != null? record.getTermIndex() : null;
   }
 
   /**
@@ -550,7 +563,7 @@ public class SegmentedRaftLogCache {
     if (startIndex >= realEnd) {
       return LogEntryHeader.EMPTY_ARRAY;
     }
-    return closedSegments.getTermIndex(startIndex, realEnd, openSegment);
+    return closedSegments.getTermIndex(startIndex, realEnd, openSegment.get());
   }
 
   private static void getFromSegment(LogSegment segment, long startIndex,
@@ -559,57 +572,48 @@ public class SegmentedRaftLogCache {
     endIndex = Math.min(endIndex, startIndex + size - 1);
     int index = offset;
     for (long i = startIndex; i <= endIndex; i++) {
-      entries[index++] = Optional.ofNullable(segment.getLogRecord(i)).map(LogRecord::getLogEntryHeader).orElse(null);
+      final LogRecord record = segment.getLogRecord(i);
+      entries[index++] = record != null? record.getLogEntryHeader() : null;
     }
   }
 
   long getStartIndex() {
     try (AutoCloseableLock readLock = closedSegments.readLock()) {
-      if (closedSegments.isEmpty()) {
-        return Optional.ofNullable(openSegment).map(LogSegment::getStartIndex).orElse(RaftLog.INVALID_LOG_INDEX);
-      } else {
+      if (!closedSegments.isEmpty()) {
         return closedSegments.get(0).getStartIndex();
       }
     }
+    final LogSegment open = openSegment.get();
+    return open != null? open.getStartIndex() : RaftLog.INVALID_LOG_INDEX;
   }
 
   long getEndIndex() {
-    try (AutoCloseableLock readLock = closedSegments.readLock()) {
-      return openSegment != null ? openSegment.getEndIndex() :
-          (closedSegments.isEmpty() ?
-              RaftLog.INVALID_LOG_INDEX:
-              closedSegments.get(closedSegments.size() - 1).getEndIndex());
-    }
+    final LogSegment open = openSegment.get();
+    return open != null ? open.getEndIndex() : closedSegments.getEndIndex();
   }
 
   long getLastIndexInClosedSegments() {
-    try (AutoCloseableLock readLock = closedSegments.readLock()) {
-      return (closedSegments.isEmpty() ? RaftLog.INVALID_LOG_INDEX :
-          closedSegments.get(closedSegments.size() - 1).getEndIndex());
-    }
+    return closedSegments.getEndIndex();
   }
 
   TermIndex getLastTermIndex() {
-    try (AutoCloseableLock readLock = closedSegments.readLock()) {
-      return (openSegment != null && openSegment.numOfEntries() > 0) ?
-          openSegment.getLastTermIndex() :
-          (closedSegments.isEmpty() ? null :
-              closedSegments.get(closedSegments.size() - 1).getLastTermIndex());
-    }
+    final TermIndex last = openSegment.get().getLastTermIndex();
+    return last != null? last: closedSegments.getLast().getLastTermIndex();
   }
 
   void appendEntry(LogSegment.Op op, ReferenceCountedObject<LogEntryProto> entry) {
     // SegmentedRaftLog does the segment creation/rolling work. Here we just
     // simply append the entry into the open segment.
-    Preconditions.assertNotNull(openSegment, "openSegment");
-    openSegment.appendToOpenSegment(op, entry);
+    final LogSegment open = Objects.requireNonNull(openSegment.get(), "openSegment");
+    open.appendToOpenSegment(op, entry);
   }
 
   /**
    * truncate log entries starting from the given index (inclusive)
    */
   TruncationSegments truncate(long index) {
-    return closedSegments.truncate(index, openSegment, this::clearOpenSegment);
+    final LogSegment open = openSegment.get();
+    return closedSegments.truncate(index, open, () -> clearOpenSegment(open));
   }
 
   TruncationSegments purge(long index) {
@@ -686,7 +690,7 @@ public class SegmentedRaftLogCache {
       } else {
         segmentIndex = -segmentIndex - 1;
         if (segmentIndex == closedSegments.size()) {
-          currentSegment = openSegment;
+          currentSegment = openSegment.get();
         } else {
           // the start index is smaller than the first closed segment's start
           // index. We no longer keep the log entry (because of the snapshot) or
@@ -700,22 +704,23 @@ public class SegmentedRaftLogCache {
 
     @Override
     public boolean hasNext() {
-      return currentSegment != null &&
-          currentSegment.getLogRecord(nextIndex) != null;
+      return currentSegment != null && currentSegment.containsIndex(nextIndex);
     }
 
     @Override
     public TermIndex next() {
-      LogRecord record;
-      if (currentSegment == null ||
-          (record = currentSegment.getLogRecord(nextIndex)) == null) {
+      if (currentSegment == null) {
+        throw new NoSuchElementException();
+      }
+      final LogRecord record = currentSegment.getLogRecord(nextIndex);
+      if (record == null) {
         throw new NoSuchElementException();
       }
       if (++nextIndex > currentSegment.getEndIndex()) {
-        if (currentSegment != openSegment) {
+        final LogSegment open = openSegment.get();
+        if (currentSegment != open) {
           segmentIndex++;
-          currentSegment = segmentIndex == closedSegments.size() ?
-              openSegment : closedSegments.get(segmentIndex);
+          currentSegment = segmentIndex == closedSegments.size() ? open : closedSegments.get(segmentIndex);
         }
       }
       return record.getTermIndex();
@@ -723,17 +728,14 @@ public class SegmentedRaftLogCache {
   }
 
   int getNumOfSegments() {
-    return closedSegments.size() + (openSegment == null ? 0 : 1);
-  }
-
-  boolean isEmpty() {
-    return closedSegments.isEmpty() && openSegment == null;
+    return closedSegments.size() + (openSegment.get() == null ? 0 : 1);
   }
 
   void close() {
-    if (openSegment != null) {
-      openSegment.clear();
-      clearOpenSegment();
+    final LogSegment open = openSegment.get();
+    if (open != null) {
+      open.clear();
+      clearOpenSegment(open);
     }
     closedSegments.clear();
   }

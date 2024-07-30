@@ -291,7 +291,7 @@ public class TestSegmentedRaftLogCache {
     TermIndex prev = null;
     while (iterator.hasNext()) {
       TermIndex termIndex = iterator.next();
-      Assertions.assertEquals(cache.getLogRecord(termIndex.getIndex()).getTermIndex(), termIndex);
+      Assertions.assertEquals(cache.getTermIndex(termIndex.getIndex()).getTermIndex(), termIndex);
       if (prev != null) {
         Assertions.assertEquals(prev.getIndex() + 1, termIndex.getIndex());
       }

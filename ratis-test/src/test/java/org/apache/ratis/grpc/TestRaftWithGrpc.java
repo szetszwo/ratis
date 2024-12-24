@@ -32,6 +32,7 @@ import org.apache.ratis.util.JavaUtils;
 import org.apache.ratis.util.TimeDuration;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -51,6 +52,7 @@ public class TestRaftWithGrpc
 
   @Disabled
   @Override
+  @Timeout(value = 300)
   public void testWithLoad() {
     // skip testWithLoad() from parent, called from parameterized testWithLoad(boolean)
   }

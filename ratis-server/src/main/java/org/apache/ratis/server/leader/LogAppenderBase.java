@@ -42,7 +42,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -52,6 +51,38 @@ import java.util.function.LongUnaryOperator;
  * An abstract implementation of {@link LogAppender}.
  */
 public abstract class LogAppenderBase implements LogAppender {
+  private static class OfferedEntries {
+    private final Map<Long, ReferenceCountedObject<EntryWithData>> map = new HashMap<>();
+
+    void retain() {
+      for (ReferenceCountedObject<EntryWithData> ref : map.values()) {
+        ref.retain();
+      }
+    }
+
+    void release() {
+      for (ReferenceCountedObject<EntryWithData> ref : map.values()) {
+        ref.release();
+      }
+    }
+
+    void putNew(long index, ReferenceCountedObject<EntryWithData> entryWithData) {
+      final ReferenceCountedObject<EntryWithData> previous = map.put(index, entryWithData);
+      Preconditions.assertNull(previous, () -> "previous with index " + index);
+    }
+
+    void removeExisting(long index) {
+      final ReferenceCountedObject<EntryWithData> removed = map.remove(index);
+      Objects.requireNonNull(removed, "removed == null");
+      removed.release();
+    }
+
+    void releaseAndClear() {
+      release();
+      map.clear();
+    }
+  }
+
   private final String name;
   private final RaftServer.Division server;
   private final LeaderState leaderState;
@@ -259,20 +290,19 @@ public abstract class LogAppenderBase implements LogAppender {
     final long leaderNext = getRaftLog().getNextIndex();
     final long followerNext = follower.getNextIndex();
     final long halfMs = heartbeatWaitTimeMs/2;
-    final Map<Long, ReferenceCountedObject<EntryWithData>> offered = new HashMap<>();
+    final OfferedEntries offered = new OfferedEntries();
     for (long next = followerNext; leaderNext > next && getHeartbeatWaitTimeMs() - halfMs > 0; next++) {
-      ReferenceCountedObject<EntryWithData> entryWithData = null;
+      final ReferenceCountedObject<EntryWithData> entryWithData;
       try {
         entryWithData = getRaftLog().retainEntryWithData(next);
+        offered.putNew(next, entryWithData);
         if (!buffer.offer(entryWithData.get())) {
           entryWithData.release();
           break;
         }
-        offered.put(next, entryWithData);
       } catch (Exception e){
-        if (entryWithData != null) {
-          entryWithData.release();
-        }
+        offered.releaseAndClear();
+        throw e;
       }
     }
     if (buffer.isEmpty()) {
@@ -285,22 +315,24 @@ public abstract class LogAppenderBase implements LogAppender {
           (entry, time, exception) -> LOG.warn("Failed to get {} in {}",
               entry, time.toString(TimeUnit.MILLISECONDS, 3), exception));
     } catch (RaftLogIOException e) {
-      for (ReferenceCountedObject<EntryWithData> ref : offered.values()) {
-        ref.release();
-      }
-      offered.clear();
+      offered.releaseAndClear();
       throw e;
     } finally {
       for (EntryWithData entry : buffer) {
         // Release remaining entries.
-        Optional.ofNullable(offered.remove(entry.getIndex())).ifPresent(ReferenceCountedObject::release);
+        offered.removeExisting(entry.getIndex());
       }
       buffer.clear();
     }
     assertProtos(protos, followerNext, previous, snapshotIndex);
     AppendEntriesRequestProto appendEntriesProto =
         leaderState.newAppendEntriesRequestProto(follower, protos, previous, callId);
-    return ReferenceCountedObject.delegateFrom(offered.values(), appendEntriesProto);
+    final ReferenceCountedObject<AppendEntriesRequestProto> ref = ReferenceCountedObject.wrap(
+        appendEntriesProto, offered::retain, offered::release);
+    ref.retain();
+    offered.release();
+    return ref;
+
   }
 
   private void assertProtos(List<LogEntryProto> protos, long nextIndex, TermIndex previous, long snapshotIndex) {

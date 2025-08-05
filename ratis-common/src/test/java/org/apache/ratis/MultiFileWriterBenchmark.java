@@ -36,7 +36,14 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Queue;
 import java.util.Random;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
@@ -48,7 +55,7 @@ public class MultiFileWriterBenchmark {
 //    Slf4jUtils.setLogLevel(FileUtils.LOG, Level.TRACE);
 
     final String totalSizeString = args.length > 0 ? args[0] : "2GB";
-    final String chunkSizeString = args.length > 1 ? args[1] : "1MB";
+    final String chunkSizeString = args.length > 1 ? args[1] : "128kB";
     System.out.println("totalSize: " + totalSizeString);
     System.out.println("chunkSize: " + chunkSizeString);
 
@@ -87,6 +94,8 @@ public class MultiFileWriterBenchmark {
 
     for (int numParts = 2; numParts <= 16; numParts <<= 1) {
       System.out.println();
+
+      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileDoubleByteBuffer());
       runBenchmark(inFile, totalSize, tmpDir, chunkSize, new MultiFileByteArray(numParts));
       runBenchmark(inFile, totalSize, tmpDir, chunkSize, new MultiFileByteBuffer(numParts));
       runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileByteArray());
@@ -207,13 +216,24 @@ public class MultiFileWriterBenchmark {
     }
   }
 
-  static int writeRandom(Random random, ByteBuffer buffer, int chunkSize, FileChannel out) throws IOException {
-    Preconditions.assertSame(chunkSize, buffer.remaining(), "remaining");
+  static int fillRandom(Random random, ByteBuffer buffer) {
     for (; buffer.remaining() > 0; ) {
       buffer.putInt(random.nextInt());
     }
     buffer.flip();
+    return buffer.remaining();
+  }
 
+  static int writeRandom(Random random, ByteBuffer buffer, int chunkSize, FileChannel out) throws IOException {
+    Preconditions.assertSame(chunkSize, buffer.remaining(), "remaining");
+    final int filled = fillRandom(random, buffer);
+    Preconditions.assertSame(chunkSize, filled, "filled");
+    final int written = writeTo(buffer, out);
+    Preconditions.assertSame(chunkSize, written, "written");
+    return filled;
+  }
+
+  static int writeTo(ByteBuffer buffer, FileChannel out) throws IOException {
     int written = 0;
     while (buffer.hasRemaining()) {
       written += out.write(buffer);
@@ -413,4 +433,170 @@ public class MultiFileWriterBenchmark {
       return size;
     }
   }
+
+  static class SingleFileDoubleByteBuffer implements Benchmark {
+
+    @Override
+    public String toString() {
+      return getClass().getSimpleName();
+    }
+
+    @Override
+    public long write(long totalSize, File outFile, int chunkSize, File inFile) throws Exception {
+      if (inFile != null) {
+        try (FileChannel in = FileChannel.open(inFile.toPath(), StandardOpenOption.READ);
+             FileChannel out = FileChannel.open(outFile.toPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+          return transferTo(in, 0, totalSize, out);
+        }
+      } else {
+        final ThreadLocalRandom random = ThreadLocalRandom.current();
+        final DoubleBuffer<ByteBuffer> buffers = new DoubleBuffer<>(
+            ByteBuffer.allocateDirect(chunkSize),
+            ByteBuffer.allocateDirect(chunkSize));
+
+        try (FileChannel out = FileChannel.open(outFile.toPath(), StandardOpenOption.WRITE, StandardOpenOption.CREATE)) {
+          final Writer writer = new Writer(buffers, out);
+          writer.thread.start();
+          CompletableFuture<Void> writeFuture = CompletableFuture.completedFuture(null);
+
+          for (long size = 0; size < totalSize; ) {
+            // fill
+            final SingleBuffer<ByteBuffer> fillBuffer = buffers.getFillBuffer();
+            final ByteBuffer buffer = fillBuffer.acquire();
+            size += fillRandom(random, buffer);
+            fillBuffer.release(buffer);
+
+            // swap
+            writeFuture.get();
+            buffers.swapBuffers();
+
+            // write
+            writeFuture = writer.submit();
+          }
+
+          writeFuture.get();
+          writer.stop.set(true);
+          return totalSize;
+        }
+      }
+    }
+
+    static class Writer {
+      private final Thread thread = new Thread(this::run);
+      private final BlockingQueue<CompletableFuture<Void>> queue = new LinkedBlockingQueue<>();
+      private final AtomicBoolean stop = new AtomicBoolean(false);
+      private final DoubleBuffer<ByteBuffer> buffers;
+      private final FileChannel out;
+
+      Writer(DoubleBuffer<ByteBuffer> buffers, FileChannel out) {
+        this.buffers = buffers;
+        this.out = out;
+      }
+
+      CompletableFuture<Void> submit() {
+        final CompletableFuture<Void> future = new CompletableFuture<>();
+        queue.add(future);
+        return future;
+      }
+
+      void run() {
+        try {
+          for (; !stop.get(); ) {
+            final CompletableFuture<Void> future = queue.take();
+            write(out, buffers.getWriteBuffer());
+            future.complete(null);
+          }
+        } catch (Exception e) {
+          throw new IllegalStateException(e);
+        }
+      }
+    }
+
+    static Void write(FileChannel out, SingleBuffer<ByteBuffer> single) {
+      final ByteBuffer buffer = single.acquire();
+      try {
+        writeTo(buffer, out);
+      } catch (IOException e) {
+        throw new CompletionException("Failed to write buffer " + buffer, e);
+      } finally {
+        single.release(buffer);
+      }
+//      System.out.println("write");
+      return null;
+    }
+
+    static class SingleBuffer<BUFFER> {
+      private BUFFER bufferAcquired;
+      private BUFFER bufferReleased;
+
+      SingleBuffer(BUFFER bufferReleased) {
+        this.bufferReleased = bufferReleased;
+      }
+
+      synchronized BUFFER acquire() {
+        Preconditions.assertNull(bufferAcquired, "bufferAcquired");
+        Objects.requireNonNull(bufferReleased, "bufferReleased == null");
+        bufferAcquired = bufferReleased;
+        bufferReleased = null;
+        return bufferAcquired;
+      }
+
+      synchronized Void release(BUFFER buffer) {
+        Preconditions.assertSame(bufferAcquired, buffer, "buffer");
+        Preconditions.assertNull(bufferReleased, "bufferReleased");
+        bufferReleased = bufferAcquired;
+        bufferAcquired = null;
+        return null;
+      }
+
+      synchronized boolean isReleased() {
+        Preconditions.assertTrue(bufferAcquired == null ^ bufferReleased == null);
+        return bufferReleased != null;
+      }
+
+      @Override
+      public synchronized String toString() {
+        return "bufferAcquired=" + bufferAcquired + ", bufferReleased=" + bufferReleased;
+      }
+    }
+
+    static class DoubleBuffer<BUFFER> {
+      // for synchronized
+      private final SingleBuffer<BUFFER> first;
+      private final SingleBuffer<BUFFER> second;
+
+      // for swapping
+      private SingleBuffer<BUFFER> fillBuffer;
+      private SingleBuffer<BUFFER> writeBuffer;
+
+      DoubleBuffer(BUFFER fillBuffer, BUFFER writeBuffer) {
+        this.first = this.fillBuffer = new SingleBuffer<>(fillBuffer);
+        this.second = this.writeBuffer = new SingleBuffer<>(writeBuffer);
+      }
+
+      SingleBuffer<BUFFER> getFillBuffer() {
+        return fillBuffer;
+      }
+
+      SingleBuffer<BUFFER> getWriteBuffer() {
+        return writeBuffer;
+      }
+
+      Void swapBuffers() {
+        synchronized (first) {
+          synchronized (second) {
+            Preconditions.assertTrue(fillBuffer.isReleased());
+            Preconditions.assertTrue(writeBuffer.isReleased());
+            final SingleBuffer<BUFFER> tmp = fillBuffer;
+            fillBuffer = writeBuffer;
+            writeBuffer = tmp;
+          }
+        }
+//        System.out.println("swap");
+        return null;
+      }
+    }
+  }
+
+
 }

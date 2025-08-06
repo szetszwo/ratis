@@ -36,12 +36,16 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-abstract class SingleFileDoubleByteBuffer implements MultiFileWriterBenchmark.Benchmark {
-  static abstract class Writer {
-    private final DoubleBuffer<ByteBuffer> buffers;
+import static org.apache.ratis.benchmark.MultiFileWriterBenchmark.Benchmark;
+import static org.apache.ratis.benchmark.MultiFileWriterBenchmark.fillRandom;
+import static org.apache.ratis.benchmark.MultiFileWriterBenchmark.writeTo;
+
+abstract class SingleFileDoubleBuffer<BUFFER> extends Benchmark {
+  static abstract class Writer<BUFFER> {
+    private final DoubleBuffer<BUFFER> buffers;
     private final FileChannel out;
 
-    Writer(DoubleBuffer<ByteBuffer> buffers, FileChannel out) {
+    Writer(DoubleBuffer<BUFFER> buffers, FileChannel out) {
       this.buffers = buffers;
       this.out = out;
     }
@@ -51,21 +55,18 @@ abstract class SingleFileDoubleByteBuffer implements MultiFileWriterBenchmark.Be
     abstract void stop() throws InterruptedException;
 
     void write() {
-      final SingleBuffer<ByteBuffer> buffer = buffers.getWriteBuffer();
+      final SingleBuffer<BUFFER> buffer = buffers.getWriteBuffer();
       try {
-        SingleFileDoubleByteBuffer.write(out, buffer);
+        writeBuffer(out, buffer);
       } catch (Exception e) {
         throw new IllegalStateException("Failed to write " + buffer, e);
       }
     }
   }
 
-  abstract Writer getWriter(DoubleBuffer<ByteBuffer> buffers, FileChannel out);
+  abstract DoubleBuffer<BUFFER> newBuffers(int chunkSize);
 
-  @Override
-  public String toString() {
-    return getClass().getSimpleName();
-  }
+  abstract Writer<BUFFER> getWriter(DoubleBuffer<BUFFER> buffers, FileChannel out);
 
   @Override
   public long write(long totalSize, File outFile, int chunkSize, File inFile) throws Exception {
@@ -74,19 +75,17 @@ abstract class SingleFileDoubleByteBuffer implements MultiFileWriterBenchmark.Be
     }
 
     final ThreadLocalRandom random = ThreadLocalRandom.current();
-    final DoubleBuffer<ByteBuffer> buffers = new DoubleBuffer<>(
-        ByteBuffer.allocateDirect(chunkSize),
-        ByteBuffer.allocateDirect(chunkSize));
+    final DoubleBuffer<BUFFER> buffers = newBuffers(chunkSize);
 
     try (FileChannel out = FileChannel.open(outFile.toPath(), StandardOpenOption.WRITE, StandardOpenOption.CREATE)) {
-      final Writer writer = getWriter(buffers, out);
+      final Writer<BUFFER> writer = getWriter(buffers, out);
       Future<?> writeFuture = CompletableFuture.completedFuture(null);
 
       for (long size = 0; size < totalSize; ) {
         // fill
-        final SingleBuffer<ByteBuffer> fillBuffer = buffers.getFillBuffer();
-        final ByteBuffer buffer = fillBuffer.acquire();
-        size += MultiFileWriterBenchmark.fillRandom(random, buffer);
+        final SingleBuffer<BUFFER> fillBuffer = buffers.getFillBuffer();
+        final BUFFER buffer = fillBuffer.acquire();
+        size += fillRandom(random, getByteBuffer(buffer));
         fillBuffer.release(buffer);
 
         // swap
@@ -103,10 +102,21 @@ abstract class SingleFileDoubleByteBuffer implements MultiFileWriterBenchmark.Be
     }
   }
 
-  static void write(FileChannel out, SingleBuffer<ByteBuffer> single) {
-    final ByteBuffer buffer = single.acquire();
+  static <BUFFER> ByteBuffer getByteBuffer(BUFFER buffer) {
+    if (buffer instanceof ByteBuffer) {
+      return (ByteBuffer) buffer;
+    } else if (buffer instanceof byte[]) {
+      return ByteBuffer.wrap((byte[]) buffer);
+    } else {
+      throw new IllegalArgumentException("Unsupported buffer " + buffer.getClass());
+    }
+  }
+  static <BUFFER> void writeBuffer(FileChannel out, SingleBuffer<BUFFER> single) {
+    final BUFFER buffer = single.acquire();
+    final ByteBuffer byteBuffer = getByteBuffer(buffer);
+
     try {
-      MultiFileWriterBenchmark.writeTo(buffer, out);
+      writeTo(byteBuffer, out);
     } catch (IOException e) {
       throw new CompletionException("Failed to write buffer " + buffer, e);
     } finally {
@@ -185,76 +195,112 @@ abstract class SingleFileDoubleByteBuffer implements MultiFileWriterBenchmark.Be
     }
   }
 
+  static abstract class SingleFileDoubleByteBuffer extends SingleFileDoubleBuffer<ByteBuffer> {
+    @Override
+    DoubleBuffer<ByteBuffer> newBuffers(int chunkSize) {
+      return new DoubleBuffer<>(
+          ByteBuffer.allocateDirect(chunkSize),
+          ByteBuffer.allocateDirect(chunkSize));
+    }
+  }
+
   static class SingleFileDoubleByteBufferThread extends SingleFileDoubleByteBuffer {
     @Override
-    Writer getWriter(DoubleBuffer<ByteBuffer> buffers, FileChannel out) {
-      final WriterThread writer = new WriterThread(buffers, out);
+    WriterThread<ByteBuffer> getWriter(DoubleBuffer<ByteBuffer> buffers, FileChannel out) {
+      return WriterThread.newWriter(buffers, out);
+    }
+  }
+
+  static class WriterThread<BUFFER> extends Writer<BUFFER> {
+    private final Thread thread = new Thread(this::run);
+    private final BlockingQueue<CompletableFuture<Void>> queue = new LinkedBlockingQueue<>();
+    private final AtomicBoolean stop = new AtomicBoolean(false);
+
+    static <BUFFER> WriterThread<BUFFER> newWriter(DoubleBuffer<BUFFER> buffers, FileChannel out) {
+      final WriterThread<BUFFER> writer = new WriterThread<>(buffers, out);
       writer.thread.start();
       return writer;
     }
 
-    static class WriterThread extends Writer {
-      private final Thread thread = new Thread(this::run);
-      private final BlockingQueue<CompletableFuture<Void>> queue = new LinkedBlockingQueue<>();
-      private final AtomicBoolean stop = new AtomicBoolean(false);
+    WriterThread(DoubleBuffer<BUFFER> buffers, FileChannel out) {
+      super(buffers, out);
+    }
 
-      WriterThread(DoubleBuffer<ByteBuffer> buffers, FileChannel out) {
-        super(buffers, out);
-      }
+    @Override
+    public CompletableFuture<?> submit() {
+      final CompletableFuture<Void> future = new CompletableFuture<>();
+      queue.add(future);
+      return future;
+    }
 
-      @Override
-      public CompletableFuture<?> submit() {
-        final CompletableFuture<Void> future = new CompletableFuture<>();
-        queue.add(future);
-        return future;
-      }
+    @Override
+    public void stop() throws InterruptedException {
+      stop.set(true);
+      thread.interrupt();
+      thread.join();
+    }
 
-      @Override
-      public void stop() throws InterruptedException {
-        stop.set(true);
-        thread.interrupt();
-        thread.join();
-      }
-
-      void run() {
-        try {
-          for (; !stop.get(); ) {
-            final CompletableFuture<Void> future = queue.take();
-            write();
-            future.complete(null);
-          }
-        } catch (InterruptedException ignored) {
-          Preconditions.assertTrue(stop.get());
+    void run() {
+      try {
+        for (; !stop.get(); ) {
+          final CompletableFuture<Void> future = queue.take();
+          write();
+          future.complete(null);
         }
+      } catch (InterruptedException ignored) {
+        Preconditions.assertTrue(stop.get());
       }
     }
   }
 
   static class SingleFileDoubleByteBufferExecutor extends SingleFileDoubleByteBuffer {
     @Override
-    Writer getWriter(DoubleBuffer<ByteBuffer> buffers, FileChannel out) {
-      return new WriterExecutor(buffers, out);
-    }
-
-    static class WriterExecutor extends Writer {
-      private final ExecutorService executor = Executors.newSingleThreadExecutor();
-
-      WriterExecutor(DoubleBuffer<ByteBuffer> buffers, FileChannel out) {
-        super(buffers, out);
-      }
-
-      @Override
-      public Future<?> submit() {
-        return executor.submit(this::write);
-      }
-
-      @Override
-      public void stop() throws InterruptedException {
-        executor.shutdown();
-        final boolean terminated = executor.awaitTermination(10, TimeUnit.SECONDS);
-        Preconditions.assertTrue(terminated);
-      }
-
+    WriterExecutor<ByteBuffer> getWriter(DoubleBuffer<ByteBuffer> buffers, FileChannel out) {
+      return new WriterExecutor<>(buffers, out);
     }
   }
+
+  static class WriterExecutor<BUFFER> extends Writer<BUFFER> {
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+
+    WriterExecutor(DoubleBuffer<BUFFER> buffers, FileChannel out) {
+      super(buffers, out);
+    }
+
+    @Override
+    public Future<?> submit() {
+      return executor.submit(this::write);
+    }
+
+    @Override
+    public void stop() throws InterruptedException {
+      executor.shutdown();
+      final boolean terminated = executor.awaitTermination(10, TimeUnit.SECONDS);
+      Preconditions.assertTrue(terminated);
+    }
+  }
+
+  static abstract class SingleFileDoubleByteArray extends SingleFileDoubleBuffer<byte[]> {
+    @Override
+    DoubleBuffer<byte[]> newBuffers(int chunkSize) {
+      return new DoubleBuffer<>(
+          new byte[chunkSize],
+          new byte[chunkSize]);
+    }
+  }
+
+  static class SingleFileDoubleByteArrayThread extends SingleFileDoubleByteArray {
+    @Override
+    WriterThread<byte[]> getWriter(DoubleBuffer<byte[]> buffers, FileChannel out) {
+      return WriterThread.newWriter(buffers, out);
+    }
+  }
+
+  static class SingleFileDoubleByteArrayExecutor extends SingleFileDoubleByteArray {
+    @Override
+    WriterExecutor<byte[]> getWriter(DoubleBuffer<byte[]> buffers, FileChannel out) {
+      return new WriterExecutor<>(buffers, out);
+    }
+  }
+
 }

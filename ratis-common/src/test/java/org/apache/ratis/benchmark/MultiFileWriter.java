@@ -37,21 +37,18 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
+import static org.apache.ratis.benchmark.MultiFileWriterBenchmark.*;
+
 /**
  * Benchmark for writing output to disk using a single file verse multiple files.
  */
 public class MultiFileWriter {
 
-  static class MultiFileByteArray implements MultiFileWriterBenchmark.Benchmark {
+  static class MultiFileByteArray extends Benchmark {
     private final int numParts;
 
     MultiFileByteArray(int numParts) {
       this.numParts = numParts;
-    }
-
-    @Override
-    public String toString() {
-      return getClass().getSimpleName() + "(" + numParts + ")";
     }
 
     @Override
@@ -155,7 +152,7 @@ public class MultiFileWriter {
 
           if (in != null) {
             in.position(offset);
-            MultiFileWriterBenchmark.read(in, chunk);
+            read(in, chunk);
           } else {
             getRandom().nextBytes(chunk);
           }
@@ -168,16 +165,11 @@ public class MultiFileWriter {
     }
   }
 
-  static class MultiFileByteBuffer implements MultiFileWriterBenchmark.Benchmark {
+  static class MultiFileByteBuffer extends Benchmark {
     private final int numParts;
 
     MultiFileByteBuffer(int numParts) {
       this.numParts = numParts;
-    }
-
-    @Override
-    public String toString() {
-      return getClass().getSimpleName() + "(" + numParts + ")";
     }
 
     @Override
@@ -222,8 +214,8 @@ public class MultiFileWriter {
         while (!getQueue().isEmpty()) {
           final long offset = Objects.requireNonNull(getQueue().poll());
           size += in != null
-              ? MultiFileWriterBenchmark.transferTo(in, offset, chunkSize, out)
-              : MultiFileWriterBenchmark.writeRandom(getRandom(), buffer, chunkSize, out);
+              ? transferTo(in, offset, chunkSize, out)
+              : writeRandom(getRandom(), buffer, chunkSize, out);
         }
       }
       return size;

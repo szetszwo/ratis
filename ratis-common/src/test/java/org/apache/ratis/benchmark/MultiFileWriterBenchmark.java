@@ -32,6 +32,9 @@ import java.nio.file.StandardOpenOption;
 import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
 
+import static org.apache.ratis.benchmark.SingleFileDoubleBuffer.*;
+import static org.apache.ratis.benchmark.MultiFileWriter.*;
+
 /**
  * Benchmark for writing output to disk using a single file verse multiple files.
  */
@@ -80,10 +83,12 @@ public class MultiFileWriterBenchmark {
     for (int numParts = 2; numParts <= 16; numParts <<= 1) {
       System.out.println();
 
-      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileDoubleByteBuffer.SingleFileDoubleByteBufferThread());
-      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileDoubleByteBuffer.SingleFileDoubleByteBufferExecutor());
-      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new MultiFileWriter.MultiFileByteArray(numParts));
-      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new MultiFileWriter.MultiFileByteBuffer(numParts));
+      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileDoubleByteBufferThread());
+      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileDoubleByteBufferExecutor());
+      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileDoubleByteArrayThread());
+      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileDoubleByteArrayExecutor());
+      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new MultiFileByteArray(numParts));
+      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new MultiFileByteBuffer(numParts));
       runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileByteArray());
       runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileByteBuffer());
     }
@@ -116,12 +121,17 @@ public class MultiFileWriterBenchmark {
     }
   }
 
-  interface Benchmark {
-    default File getOutputPath(File tmpDir) {
+  static abstract class Benchmark {
+    File getOutputPath(File tmpDir) {
       return new File(tmpDir, getClass().getSimpleName());
     }
 
-    long write(long totalSize, File outFile, int chunkSize, File inFile) throws Exception;
+    abstract long write(long totalSize, File outFile, int chunkSize, File inFile) throws Exception;
+
+    @Override
+    public final String toString() {
+      return getClass().getSimpleName();
+    }
   }
 
   static void read(FileChannel in, byte[] array) throws IOException {
@@ -138,11 +148,7 @@ public class MultiFileWriterBenchmark {
     Preconditions.assertSame(chunk.capacity(), size, "readLength");
   }
 
-  static class SingleFileByteArray implements Benchmark {
-    @Override
-    public String toString() {
-      return getClass().getSimpleName();
-    }
+  static class SingleFileByteArray extends Benchmark {
 
     @Override
     public long write(long totalSize, File outFile, int chunkSize, File inFile) throws Exception {
@@ -178,12 +184,7 @@ public class MultiFileWriterBenchmark {
     return transferred;
   }
 
-  static class SingleFileByteBuffer implements Benchmark {
-    @Override
-    public String toString() {
-      return getClass().getSimpleName();
-    }
-
+  static class SingleFileByteBuffer extends Benchmark {
     @Override
     public long write(long totalSize, File outFile, int chunkSize, File inFile) throws Exception {
       if (inFile != null) {

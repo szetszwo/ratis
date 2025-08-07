@@ -24,21 +24,22 @@ import org.apache.ratis.util.SizeInBytes;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.util.Random;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.concurrent.ThreadLocalRandom;
 
-import static org.apache.ratis.benchmark.SingleFileDoubleBuffer.*;
+import static org.apache.ratis.benchmark.SingleFileWriter.*;
 import static org.apache.ratis.benchmark.MultiFileWriter.*;
 
 /**
  * Benchmark for writing output to disk using a single file verse multiple files.
  */
-public class MultiFileWriterBenchmark {
+public class ReadWriteBenchmark {
   public static void main(String[] args) throws Exception {
 //    Slf4jUtils.setLogLevel(FileUtils.LOG, Level.TRACE);
 
@@ -49,11 +50,8 @@ public class MultiFileWriterBenchmark {
 
     final long totalSize = SizeInBytes.valueOf(totalSizeString).getSize();
     final int chunkSize = SizeInBytes.valueOf(chunkSizeString).getSizeInt();
-    final File tmpDir = new File("tmp_" + MultiFileWriterBenchmark.class.getSimpleName());
+    final File tmpDir = new File("tmp_" + ReadWriteBenchmark.class.getSimpleName());
     System.out.println("tmpDir   : " + tmpDir);
-
-    FileUtils.deleteFully(tmpDir);
-    FileUtils.createDirectories(tmpDir);
 
     runBenchmark(tmpDir, totalSize, chunkSize, Type.RANDOM);
     runBenchmark(tmpDir, totalSize, chunkSize, Type.FILE);
@@ -72,6 +70,9 @@ public class MultiFileWriterBenchmark {
   }
 
   static void runBenchmark(File tmpDir, long totalSize, int chunkSize, Type type) throws Exception {
+    FileUtils.deleteFully(tmpDir);
+    FileUtils.createDirectories(tmpDir);
+
     final File inFile;
     if (type == Type.FILE) {
       inFile = new File(tmpDir, "inputFile");
@@ -81,56 +82,28 @@ public class MultiFileWriterBenchmark {
     }
 
     for (int numParts = 2; numParts <= 16; numParts <<= 1) {
-      System.out.println();
+      final WriteBenchmark[] benchmarks = {
+          new SingleFileDoubleByteBufferThread(),
+          new SingleFileDoubleByteBufferExecutor(),
+          new SingleFileDoubleByteArrayThread(),
+          new SingleFileDoubleByteArrayExecutor(),
+          new MultiFileByteArray(numParts),
+          new MultiFileByteBuffer(numParts),
+          new SingleFileByteArray(),
+          new SingleFileByteBuffer()
+      };
 
-      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileDoubleByteBufferThread());
-      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileDoubleByteBufferExecutor());
-      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileDoubleByteArrayThread());
-      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileDoubleByteArrayExecutor());
-      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new MultiFileByteArray(numParts));
-      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new MultiFileByteBuffer(numParts));
-      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileByteArray());
-      runBenchmark(inFile, totalSize, tmpDir, chunkSize, new SingleFileByteBuffer());
-    }
-  }
+      final SortedMap<Long, WriteBenchmark> sorted = new TreeMap<>();
 
-  static void runBenchmark(File inFile, long totalSize, File tmpDir, int chunkSize, Benchmark benchmark) throws Exception {
-    if (chunkSize % 4 != 0) {
-      throw new IllegalArgumentException("chunkSize (=" + totalSize + ") must be a multiple of 4");
-    }
-    if (totalSize % chunkSize != 0) {
-      throw new IllegalArgumentException("totalSize (=" + totalSize + ") must be a multiple of chunkSize (=" + chunkSize + ")");
-    }
-    if (inFile != null) {
-      final long inFileSize = inFile.length();
-      if (inFileSize < totalSize) {
-        throw new IllegalArgumentException("File size (=" + inFileSize + ") < totalSize (=" + totalSize + "): " + inFile);
+      for(WriteBenchmark benchmark : benchmarks) {
+        final Long elapsed = benchmark.run(inFile, totalSize, tmpDir, chunkSize);
+        if (elapsed != null) {
+          sorted.put(elapsed, benchmark);
+        }
       }
-    }
 
-    final File outPath = benchmark.getOutputPath(tmpDir);
-    FileUtils.deleteFully(outPath);
-
-    final long start = System.nanoTime();
-    final long writeSize = benchmark.write(totalSize, outPath, chunkSize, inFile);
-    final long elapsed = System.nanoTime() - start;
-    if (writeSize > 0) {
-      Preconditions.assertSame(totalSize, writeSize, "writeSize");
-      System.out.printf("  %-40s [%6s]: %9.3f ms%n",
-          benchmark, inFile == null ? "random" : "file", elapsed / 1_000_000.0);
-    }
-  }
-
-  static abstract class Benchmark {
-    File getOutputPath(File tmpDir) {
-      return new File(tmpDir, getClass().getSimpleName());
-    }
-
-    abstract long write(long totalSize, File outFile, int chunkSize, File inFile) throws Exception;
-
-    @Override
-    public final String toString() {
-      return getClass().getSimpleName();
+      System.out.println("Sorted: " + sorted.values());
+      System.out.println();
     }
   }
 
@@ -148,61 +121,12 @@ public class MultiFileWriterBenchmark {
     Preconditions.assertSame(chunk.capacity(), size, "readLength");
   }
 
-  static class SingleFileByteArray extends Benchmark {
-
-    @Override
-    public long write(long totalSize, File outFile, int chunkSize, File inFile) throws Exception {
-      final byte[] chunk = new byte[chunkSize];
-      long size = 0;
-      try (OutputStream out = Files.newOutputStream(outFile.toPath())) {
-        if (inFile != null) {
-          try (RandomAccessFile inRAF = new RandomAccessFile(inFile, "r");
-               FileChannel in = inRAF.getChannel()) {
-            for (; size < totalSize; size += chunk.length) {
-              read(in, chunk);
-              out.write(chunk);
-            }
-          }
-        } else {
-          final ThreadLocalRandom random = ThreadLocalRandom.current();
-          for (; size < totalSize; size += chunk.length) {
-            random.nextBytes(chunk);
-            out.write(chunk);
-          }
-          return totalSize;
-        }
-      }
-      return size;
-    }
-  }
-
   static long transferTo(FileChannel in, long offset, long size, FileChannel out) throws IOException {
     long transferred = 0;
     for (; transferred < size; ) {
       transferred += in.transferTo(offset + transferred, size - transferred, out);
     }
     return transferred;
-  }
-
-  static class SingleFileByteBuffer extends Benchmark {
-    @Override
-    public long write(long totalSize, File outFile, int chunkSize, File inFile) throws Exception {
-      if (inFile != null) {
-        try (FileChannel in = FileChannel.open(inFile.toPath(), StandardOpenOption.READ);
-             FileChannel out = FileChannel.open(outFile.toPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
-          return transferTo(in, 0, totalSize, out);
-        }
-      } else {
-        final ByteBuffer buffer = ByteBuffer.allocateDirect(chunkSize);
-        final ThreadLocalRandom random = ThreadLocalRandom.current();
-        try (FileChannel out = FileChannel.open(outFile.toPath(), StandardOpenOption.WRITE, StandardOpenOption.CREATE)) {
-          for (long size = 0; size < totalSize; ) {
-            size += writeRandom(random, buffer, chunkSize, out);
-          }
-        }
-        return totalSize;
-      }
-    }
   }
 
   static int fillRandom(Random random, ByteBuffer buffer) {

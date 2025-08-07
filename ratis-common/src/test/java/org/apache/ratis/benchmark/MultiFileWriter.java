@@ -37,18 +37,55 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
-import static org.apache.ratis.benchmark.MultiFileWriterBenchmark.*;
+import static org.apache.ratis.benchmark.ReadWriteBenchmark.*;
 
 /**
  * Benchmark for writing output to disk using a single file verse multiple files.
  */
 public class MultiFileWriter {
-
-  static class MultiFileByteArray extends Benchmark {
+  static abstract class MultiFileBenchmark<WORKER extends Worker> extends WriteBenchmark {
     private final int numParts;
 
-    MultiFileByteArray(int numParts) {
+    MultiFileBenchmark(int numParts) {
       this.numParts = numParts;
+    }
+
+    @Override
+    public String toString() {
+      return super.toString() + "_" + numParts;
+    }
+
+    List<WORKER> newWorkers(File outDir, Function<Path, WORKER> constructor) {
+      final List<WORKER> workers = new ArrayList<>(numParts);
+      for (int i = 0; i < numParts; i++) {
+        final Path outFile = outDir.toPath().resolve(String.format("part%02d.out", i));
+        workers.add(constructor.apply(outFile));
+      }
+      return workers;
+    }
+
+    long submitAndJoin(List<WORKER> workers, long totalSize, int chunkSize) throws Exception {
+      int i = 0;
+      for (long offset = 0; offset < totalSize; offset += chunkSize) {
+        workers.get(i % numParts).submit(offset);
+        i++;
+      }
+
+      for (WORKER worker : workers) {
+        worker.getThread().start();
+      }
+      long size = 0;
+      for (WORKER worker : workers) {
+        worker.getThread().join();
+        size += worker.getSize();
+      }
+      return size;
+    }
+  }
+
+  static class MultiFileByteArray extends MultiFileBenchmark<ByteArrayWorker> {
+    MultiFileByteArray(int numParts) {
+      super(numParts);
     }
 
     @Override
@@ -57,41 +94,14 @@ public class MultiFileWriter {
 
       if (inFile != null) {
         try (RandomAccessFile raf = new RandomAccessFile(inFile, "r")) {
-          final List<Worker> workers = newWorkers(outDir, numParts, out -> new ByteArrayWorker(raf, out, chunkSize));
-          return submitAndJoin(workers, totalSize, chunkSize, numParts);
+          final List<ByteArrayWorker> workers = newWorkers(outDir, out -> new ByteArrayWorker(raf, out, chunkSize));
+          return submitAndJoin(workers, totalSize, chunkSize);
         }
       } else {
-        final List<Worker> workers = newWorkers(outDir, numParts, out -> new ByteArrayWorker(null, out, chunkSize));
-        return submitAndJoin(workers, totalSize, chunkSize, numParts);
+        final List<ByteArrayWorker> workers = newWorkers(outDir, out -> new ByteArrayWorker(null, out, chunkSize));
+        return submitAndJoin(workers, totalSize, chunkSize);
       }
     }
-  }
-
-  static long submitAndJoin(List<Worker> workers, long totalSize, int chunkSize, int numParts) throws Exception {
-    int i = 0;
-    for (long offset = 0; offset < totalSize; offset += chunkSize) {
-      workers.get(i % numParts).submit(offset);
-      i++;
-    }
-
-    for (Worker worker : workers) {
-      worker.getThread().start();
-    }
-    long size = 0;
-    for (Worker worker : workers) {
-      worker.getThread().join();
-      size += worker.getSize();
-    }
-    return size;
-  }
-
-  static <W extends Worker> List<W> newWorkers(File outDir, int numParts, Function<Path, W> constructor) {
-    final List<W> workers = new ArrayList<>(numParts);
-    for (int i = 0; i < numParts; i++) {
-      final Path outFile = outDir.toPath().resolve(String.format("part%02d.out", i));
-      workers.add(constructor.apply(outFile));
-    }
-    return workers;
   }
 
   static abstract class Worker {
@@ -165,11 +175,9 @@ public class MultiFileWriter {
     }
   }
 
-  static class MultiFileByteBuffer extends Benchmark {
-    private final int numParts;
-
+  static class MultiFileByteBuffer extends MultiFileBenchmark<ByteBufferWorker> {
     MultiFileByteBuffer(int numParts) {
-      this.numParts = numParts;
+      super(numParts);
     }
 
     @Override
@@ -178,12 +186,12 @@ public class MultiFileWriter {
 
       if (inFile != null) {
         try (RandomAccessFile raf = new RandomAccessFile(inFile, "r")) {
-          final List<Worker> workers = newWorkers(outDir, numParts, out -> new ByteBufferWorker(raf, out, chunkSize));
-          return submitAndJoin(workers, totalSize, chunkSize, numParts);
+          final List<ByteBufferWorker> workers = newWorkers(outDir, out -> new ByteBufferWorker(raf, out, chunkSize));
+          return submitAndJoin(workers, totalSize, chunkSize);
         }
       } else {
-        final List<Worker> workers = newWorkers(outDir, numParts, out -> new ByteBufferWorker(null, out, chunkSize));
-        return submitAndJoin(workers, totalSize, chunkSize, numParts);
+        final List<ByteBufferWorker> workers = newWorkers(outDir, out -> new ByteBufferWorker(null, out, chunkSize));
+        return submitAndJoin(workers, totalSize, chunkSize);
       }
     }
   }
@@ -221,6 +229,4 @@ public class MultiFileWriter {
       return size;
     }
   }
-
-
 }

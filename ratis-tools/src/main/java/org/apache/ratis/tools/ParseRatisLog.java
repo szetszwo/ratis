@@ -22,8 +22,8 @@ import org.apache.ratis.proto.RaftProtos.StateMachineLogEntryProto;
 import org.apache.ratis.proto.RaftProtos.LogEntryProto;
 import org.apache.ratis.server.RaftServerConfigKeys;
 import org.apache.ratis.server.raftlog.LogProtoUtils;
-import org.apache.ratis.server.raftlog.segmented.LogSegmentPath;
-import org.apache.ratis.server.raftlog.segmented.LogSegment;
+import org.apache.ratis.server.raftlog.segmented.v2.LogSegmentPath;
+import org.apache.ratis.server.raftlog.segmented.v2.LogSegment;
 import org.apache.ratis.util.SizeInBytes;
 
 import java.io.File;

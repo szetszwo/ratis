@@ -29,7 +29,7 @@ import org.apache.ratis.server.protocol.TermIndex;
 import org.apache.ratis.server.raftlog.LogProtoUtils;
 import org.apache.ratis.server.raftlog.RaftLog;
 import org.apache.ratis.server.raftlog.memory.MemoryRaftLog;
-import org.apache.ratis.server.raftlog.segmented.SegmentedRaftLog;
+import org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLog;
 import org.apache.ratis.server.storage.*;
 import org.apache.ratis.proto.RaftProtos.InstallSnapshotRequestProto;
 import org.apache.ratis.proto.RaftProtos.LogEntryProto;

@@ -15,20 +15,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.ratis.server.raftlog.segmented;
+package org.apache.ratis.server.raftlog.segmented.v2;
 
 import org.apache.ratis.BaseTest;
 import org.apache.ratis.RaftTestUtil.SimpleOperation;
 import org.apache.ratis.conf.RaftProperties;
 import org.apache.ratis.metrics.impl.DefaultTimekeeperImpl;
+import org.apache.ratis.proto.RaftProtos.LogEntryProto;
+import org.apache.ratis.proto.RaftProtos.StateMachineLogEntryProto;
 import org.apache.ratis.server.RaftServerConfigKeys;
 import org.apache.ratis.server.impl.RaftServerTestUtil;
 import org.apache.ratis.server.metrics.SegmentedRaftLogMetrics;
 import org.apache.ratis.server.protocol.TermIndex;
 import org.apache.ratis.server.raftlog.LogProtoUtils;
 import org.apache.ratis.server.storage.RaftStorage;
-import org.apache.ratis.proto.RaftProtos.LogEntryProto;
-import org.apache.ratis.proto.RaftProtos.StateMachineLogEntryProto;
 import org.apache.ratis.server.storage.RaftStorageTestUtils;
 import org.apache.ratis.thirdparty.com.google.protobuf.CodedOutputStream;
 import org.apache.ratis.util.FileUtils;
@@ -51,8 +51,8 @@ import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static org.apache.ratis.server.raftlog.RaftLog.INVALID_LOG_INDEX;
-import static org.apache.ratis.server.raftlog.segmented.LogSegment.getEntrySize;
-import static org.apache.ratis.server.raftlog.segmented.SegmentedRaftLogTestUtils.MAX_OP_SIZE;
+import static org.apache.ratis.server.raftlog.segmented.v2.LogSegment.getEntrySize;
+import static org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLogTestUtils.MAX_OP_SIZE;
 
 /**
  * Test basic functionality of {@link LogSegment}

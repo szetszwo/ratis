@@ -32,7 +32,7 @@ import org.apache.ratis.server.RaftServer;
 import org.apache.ratis.server.RaftServerRpc;
 import org.apache.ratis.server.leader.LogAppender;
 import org.apache.ratis.server.protocol.TermIndex;
-import org.apache.ratis.server.raftlog.segmented.SegmentedRaftLog;
+import org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLog;
 import org.apache.ratis.server.storage.RaftStorage;
 import org.apache.ratis.statemachine.TransactionContext;
 import org.apache.ratis.util.JavaUtils;

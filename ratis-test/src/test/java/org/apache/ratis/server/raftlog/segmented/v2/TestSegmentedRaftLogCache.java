@@ -15,29 +15,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.ratis.server.raftlog.segmented;
-
-import static org.apache.ratis.server.metrics.SegmentedRaftLogMetrics.*;
-import static org.apache.ratis.server.raftlog.segmented.SegmentedRaftLogTestUtils.MAX_OP_SIZE;
-
-import java.util.Iterator;
-import java.util.stream.IntStream;
+package org.apache.ratis.server.raftlog.segmented.v2;
 
 import org.apache.ratis.RaftTestUtil.SimpleOperation;
 import org.apache.ratis.conf.RaftProperties;
 import org.apache.ratis.metrics.impl.RatisMetricRegistryImpl;
+import org.apache.ratis.proto.RaftProtos.LogEntryProto;
 import org.apache.ratis.server.impl.RaftServerTestUtil;
 import org.apache.ratis.server.metrics.SegmentedRaftLogMetrics;
 import org.apache.ratis.server.protocol.TermIndex;
 import org.apache.ratis.server.raftlog.LogEntryHeader;
 import org.apache.ratis.server.raftlog.LogProtoUtils;
-import org.apache.ratis.server.raftlog.segmented.SegmentedRaftLogCache.TruncationSegments;
-import org.apache.ratis.server.raftlog.segmented.LogSegment.LogRecord;
-import org.apache.ratis.proto.RaftProtos.LogEntryProto;
+import org.apache.ratis.server.raftlog.segmented.v2.LogSegment.LogRecord;
+import org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLogCache.TruncationSegments;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import java.util.Iterator;
+import java.util.stream.IntStream;
+
+import static org.apache.ratis.server.metrics.SegmentedRaftLogMetrics.RAFT_LOG_CACHE_CLOSED_SEGMENTS_NUM;
+import static org.apache.ratis.server.metrics.SegmentedRaftLogMetrics.RAFT_LOG_CACHE_CLOSED_SEGMENTS_SIZE_IN_BYTES;
+import static org.apache.ratis.server.metrics.SegmentedRaftLogMetrics.RAFT_LOG_CACHE_OPEN_SEGMENT_SIZE_IN_BYTES;
+import static org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLogTestUtils.MAX_OP_SIZE;
 
 public class TestSegmentedRaftLogCache {
   private static final RaftProperties PROP = new RaftProperties();

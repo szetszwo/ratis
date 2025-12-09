@@ -36,19 +36,19 @@
     <Bug pattern="EI_EXPOSE_REP"/>
   </Match>
   <Match>
-    <Class name="org.apache.ratis.server.raftlog.segmented.SegmentedRaftLog"/>
+    <Class name="org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLog"/>
     <Bug pattern="EI_EXPOSE_REP"/>
   </Match>
   <Match>
-    <Class name="org.apache.ratis.server.raftlog.segmented.SegmentedRaftLog"/>
+    <Class name="org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLog"/>
     <Bug pattern="EI_EXPOSE_REP2"/>
   </Match>
   <Match>
-    <Class name="org.apache.ratis.server.raftlog.segmented.SegmentedRaftLogCache$EntryIterator"/>
+    <Class name="org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLogCache$EntryIterator"/>
     <Bug pattern="CT_CONSTRUCTOR_THROW"/>
   </Match>
   <Match>
-    <Class name="org.apache.ratis.server.raftlog.segmented.SegmentedRaftLogOutputStream"/>
+    <Class name="org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLogOutputStream"/>
     <Bug pattern="CT_CONSTRUCTOR_THROW"/>
   </Match>
   <Match>
@@ -56,7 +56,7 @@
     <Bug pattern="CT_CONSTRUCTOR_THROW"/>
   </Match>
   <Match>
-    <Class name="org.apache.ratis.server.raftlog.segmented.SegmentedRaftLog$Builder"/>
+    <Class name="org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLog$Builder"/>
     <Bug pattern="EI_EXPOSE_REP2"/>
   </Match>
   <Match>

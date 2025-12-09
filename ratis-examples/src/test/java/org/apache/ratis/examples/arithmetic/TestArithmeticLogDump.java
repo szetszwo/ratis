@@ -27,7 +27,7 @@ import org.apache.ratis.RaftTestUtil;
 import org.apache.ratis.conf.RaftProperties;
 import org.apache.ratis.server.RaftServer;
 import org.apache.ratis.server.RaftServerConfigKeys;
-import org.apache.ratis.server.raftlog.segmented.LogSegmentPath;
+import org.apache.ratis.server.raftlog.segmented.v2.LogSegmentPath;
 import org.apache.ratis.server.simulation.MiniRaftClusterWithSimulatedRpc;
 import org.apache.ratis.statemachine.impl.SimpleStateMachine4Testing;
 import org.apache.ratis.statemachine.StateMachine;

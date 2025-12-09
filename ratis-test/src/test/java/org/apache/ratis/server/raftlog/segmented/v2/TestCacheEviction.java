@@ -15,7 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.ratis.server.raftlog.segmented;
+package org.apache.ratis.server.raftlog.segmented.v2;
 
 import org.apache.ratis.BaseTest;
 import org.apache.ratis.RaftTestUtil.SimpleOperation;
@@ -30,13 +30,13 @@ import org.apache.ratis.server.impl.MiniRaftCluster;
 import org.apache.ratis.server.impl.RaftServerTestUtil;
 import org.apache.ratis.server.raftlog.LogProtoUtils;
 import org.apache.ratis.server.raftlog.RaftLog;
-import org.apache.ratis.server.raftlog.segmented.CacheInvalidationPolicy.CacheInvalidationPolicyDefault;
-import org.apache.ratis.server.raftlog.segmented.SegmentedRaftLogCache.LogSegmentList;
-import org.apache.ratis.server.raftlog.segmented.TestSegmentedRaftLog.SegmentRange;
+import org.apache.ratis.server.raftlog.segmented.v2.CacheInvalidationPolicy.CacheInvalidationPolicyDefault;
+import org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLogCache.LogSegmentList;
+import org.apache.ratis.server.raftlog.segmented.v2.TestSegmentedRaftLog.SegmentRange;
 import org.apache.ratis.server.storage.RaftStorage;
 import org.apache.ratis.server.storage.RaftStorageTestUtils;
-import org.apache.ratis.statemachine.impl.SimpleStateMachine4Testing;
 import org.apache.ratis.statemachine.StateMachine;
+import org.apache.ratis.statemachine.impl.SimpleStateMachine4Testing;
 import org.apache.ratis.util.JavaUtils;
 import org.apache.ratis.util.SizeInBytes;
 import org.junit.jupiter.api.Assertions;
@@ -49,7 +49,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
-import static org.apache.ratis.server.raftlog.segmented.SegmentedRaftLogTestUtils.MAX_OP_SIZE;
+import static org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLogTestUtils.MAX_OP_SIZE;
 
 public class TestCacheEviction extends BaseTest {
   private static final CacheInvalidationPolicy POLICY = new CacheInvalidationPolicyDefault();

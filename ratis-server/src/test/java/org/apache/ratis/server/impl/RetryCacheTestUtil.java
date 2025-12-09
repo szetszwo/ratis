@@ -24,7 +24,7 @@ import org.apache.ratis.protocol.ClientInvocationId;
 import org.apache.ratis.protocol.RaftGroupMemberId;
 import org.apache.ratis.server.RaftServer;
 import org.apache.ratis.server.RetryCache;
-import org.apache.ratis.server.raftlog.segmented.SegmentedRaftLog;
+import org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLog;
 import org.apache.ratis.server.storage.RaftStorage;
 import org.apache.ratis.util.TimeDuration;
 import org.junit.jupiter.api.Assertions;

@@ -37,7 +37,7 @@ import org.apache.ratis.server.RaftServer;
 import org.apache.ratis.server.RaftServerConfigKeys;
 import org.apache.ratis.server.metrics.LeaderElectionMetrics;
 import org.apache.ratis.server.protocol.TermIndex;
-import org.apache.ratis.server.raftlog.segmented.SegmentedRaftLogTestUtils;
+import org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLogTestUtils;
 import org.apache.ratis.test.tag.Flaky;
 import org.apache.ratis.thirdparty.com.codahale.metrics.Timer;
 import org.apache.ratis.util.CodeInjectionForTesting;
@@ -64,7 +64,6 @@ import java.util.stream.Collectors;
 
 import static org.apache.ratis.RaftTestUtil.getPeersWithPriority;
 import static org.apache.ratis.RaftTestUtil.waitForLeader;
-import static org.apache.ratis.proto.RaftProtos.RaftPeerRole.LISTENER;
 import static org.apache.ratis.server.metrics.LeaderElectionMetrics.LAST_LEADER_ELECTION_ELAPSED_TIME;
 import static org.apache.ratis.server.metrics.LeaderElectionMetrics.LEADER_ELECTION_COUNT_METRIC;
 import static org.apache.ratis.server.metrics.LeaderElectionMetrics.LEADER_ELECTION_TIME_TAKEN;

@@ -32,7 +32,7 @@ import org.apache.ratis.server.impl.MiniRaftCluster;
 import org.apache.ratis.server.impl.RaftServerTestUtil;
 import org.apache.ratis.server.protocol.TermIndex;
 import org.apache.ratis.server.raftlog.RaftLog;
-import org.apache.ratis.server.raftlog.segmented.SegmentedRaftLog;
+import org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLog;
 import org.apache.ratis.statemachine.StateMachine;
 import org.apache.ratis.statemachine.TransactionContext;
 import org.apache.ratis.statemachine.impl.SimpleStateMachine4Testing;

@@ -15,7 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.ratis.server.raftlog.segmented;
+package org.apache.ratis.server.raftlog.segmented.v2;
 
 import org.apache.ratis.conf.RaftProperties;
 import org.apache.ratis.metrics.Timekeeper;
@@ -31,8 +31,8 @@ import org.apache.ratis.server.raftlog.RaftLogBase;
 import org.apache.ratis.server.raftlog.RaftLogIOException;
 import org.apache.ratis.server.storage.RaftStorageMetadata;
 import org.apache.ratis.server.storage.RaftStorage;
-import org.apache.ratis.server.raftlog.segmented.LogSegment.LogRecord;
-import org.apache.ratis.server.raftlog.segmented.SegmentedRaftLogCache.TruncateIndices;
+import org.apache.ratis.server.raftlog.segmented.v2.LogSegment.LogRecord;
+import org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLogCache.TruncateIndices;
 import org.apache.ratis.proto.RaftProtos.LogEntryProto;
 import org.apache.ratis.statemachine.StateMachine;
 import org.apache.ratis.statemachine.TransactionContext;

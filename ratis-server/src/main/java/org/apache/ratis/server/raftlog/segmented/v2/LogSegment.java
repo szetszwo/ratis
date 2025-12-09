@@ -15,15 +15,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.ratis.server.raftlog.segmented.v2;
 
 import org.apache.ratis.proto.RaftProtos.LogEntryProto;
 import org.apache.ratis.server.RaftServerConfigKeys.Log.CorruptionPolicy;
 import org.apache.ratis.server.metrics.SegmentedRaftLogMetrics;
 import org.apache.ratis.server.protocol.TermIndex;
-import org.apache.ratis.server.raftlog.LogEntryHeader;
 import org.apache.ratis.server.raftlog.LogProtoUtils;
 import org.apache.ratis.server.raftlog.RaftLogIOException;
+import org.apache.ratis.server.raftlog.segmented.LogRecord;
 import org.apache.ratis.server.storage.RaftStorage;
 import org.apache.ratis.thirdparty.com.google.common.annotations.VisibleForTesting;
 import org.apache.ratis.thirdparty.com.google.common.cache.CacheLoader;
@@ -41,8 +42,6 @@ import java.util.Comparator;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentNavigableMap;
-import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -80,67 +79,6 @@ public final class LogSegment {
     }
     final int serialized = e.getSerializedSize();
     return serialized + CodedOutputStream.computeUInt32SizeNoTag(serialized) + 4L;
-  }
-
-  static class LogRecord {
-    /** starting offset in the file */
-    private final long offset;
-    private final LogEntryHeader logEntryHeader;
-
-    LogRecord(long offset, LogEntryProto entry) {
-      this.offset = offset;
-      this.logEntryHeader = LogEntryHeader.valueOf(entry);
-    }
-
-    LogEntryHeader getLogEntryHeader() {
-      return logEntryHeader;
-    }
-
-    TermIndex getTermIndex() {
-      return getLogEntryHeader().getTermIndex();
-    }
-
-    long getOffset() {
-      return offset;
-    }
-  }
-
-  private static class Records {
-    private final ConcurrentNavigableMap<Long, LogRecord> map = new ConcurrentSkipListMap<>();
-
-    int size() {
-      return map.size();
-    }
-
-    LogRecord getFirst() {
-      final Map.Entry<Long, LogRecord> first = map.firstEntry();
-      return first != null? first.getValue() : null;
-    }
-
-    LogRecord getLast() {
-      final Map.Entry<Long, LogRecord> last = map.lastEntry();
-      return last != null? last.getValue() : null;
-    }
-
-    LogRecord get(long i) {
-      return map.get(i);
-    }
-
-    long append(LogRecord record) {
-      final long index = record.getTermIndex().getIndex();
-      final LogRecord previous = map.put(index, record);
-      Preconditions.assertNull(previous, "previous");
-      return index;
-    }
-
-    LogRecord removeLast() {
-      final Map.Entry<Long, LogRecord> last = map.pollLastEntry();
-      return Objects.requireNonNull(last, "last == null").getValue();
-    }
-
-    void clear() {
-      map.clear();
-    }
   }
 
   static LogSegment newOpenSegment(RaftStorage storage, long start, SizeInBytes maxOpSize,
@@ -309,10 +247,8 @@ public final class LogSegment {
   /** later replace it with a metric */
   private final AtomicInteger loadingTimes = new AtomicInteger();
 
-  /**
-   * the list of records is more like the index of a segment
-   */
-  private final Records records = new Records();
+  /** Log records of a segment */
+  private final LogRecord.AppendOnlyMap records = new LogRecord.AppendOnlyMap();
   /**
    * the entryCache caches the content of log entries.
    */
@@ -365,7 +301,7 @@ public final class LogSegment {
           "gap between entries %s and %s", entry.getIndex(), currentLast.getTermIndex().getIndex());
     }
 
-    final LogRecord record = new LogRecord(totalFileSize, entry);
+    final LogRecord record = LogRecord.valueOf(totalFileSize, entry);
     if (keepEntryInCache) {
       putEntryCache(record.getTermIndex(), entry, op);
     }
@@ -424,7 +360,7 @@ public final class LogSegment {
       final LogRecord removed = records.removeLast();
       Preconditions.assertSame(index, removed.getTermIndex().getIndex(), "removedIndex");
       removeEntryCache(removed.getTermIndex(), Op.REMOVE_CACHE);
-      totalFileSize = removed.offset;
+      totalFileSize = removed.getOffset();
     }
     isOpen = false;
     this.endIndex = fromIndex - 1;

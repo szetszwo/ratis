@@ -44,7 +44,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import static org.apache.ratis.server.raftlog.segmented.v2.TestLogSegment.ZERO_START_NULL_END;
+import static org.apache.ratis.server.raftlog.segmented.v2.t TestLogSegment.ZERO_START_NULL_END;
 
 /**
  * Test basic functionality of LogReader, SegmentedRaftLogInputStream, and SegmentedRaftLogOutputStream.

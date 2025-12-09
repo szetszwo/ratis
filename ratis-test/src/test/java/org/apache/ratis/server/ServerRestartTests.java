@@ -36,7 +36,7 @@ import org.apache.ratis.server.raftlog.RaftLogIOException;
 import org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLogFormat;
 import org.apache.ratis.server.RaftServerConfigKeys.Log;
 import org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLogTestUtils;
-import org.apache.ratis.server.raftlog.segmented.TestSegmentedRaftLog;
+import org.apache.ratis.server.raftlog.segmented.v2.TestSegmentedRaftLog;
 import org.apache.ratis.statemachine.impl.SimpleStateMachine4Testing;
 import org.apache.ratis.statemachine.StateMachine;
 import org.apache.ratis.util.FileUtils;

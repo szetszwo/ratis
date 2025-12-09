@@ -26,7 +26,7 @@ import org.apache.ratis.server.metrics.SegmentedRaftLogMetrics;
 import org.apache.ratis.server.protocol.TermIndex;
 import org.apache.ratis.server.raftlog.LogEntryHeader;
 import org.apache.ratis.server.raftlog.LogProtoUtils;
-import org.apache.ratis.server.raftlog.segmented.v2.LogSegment.LogRecord;
+import org.apache.ratis.server.raftlog.segmented.LogRecord;
 import org.apache.ratis.server.raftlog.segmented.v2.SegmentedRaftLogCache.TruncationSegments;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;

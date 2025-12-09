@@ -28,6 +28,7 @@ import org.apache.ratis.server.impl.RaftServerTestUtil;
 import org.apache.ratis.server.metrics.SegmentedRaftLogMetrics;
 import org.apache.ratis.server.protocol.TermIndex;
 import org.apache.ratis.server.raftlog.LogProtoUtils;
+import org.apache.ratis.server.raftlog.segmented.LogRecord;
 import org.apache.ratis.server.storage.RaftStorage;
 import org.apache.ratis.server.storage.RaftStorageTestUtils;
 import org.apache.ratis.thirdparty.com.google.protobuf.CodedOutputStream;
@@ -136,7 +137,7 @@ public class TestLogSegment extends BaseTest {
 
     long offset = SegmentedRaftLogFormat.getHeaderLength();
     for (long i = start; i <= end; i++) {
-      LogSegment.LogRecord record = segment.getLogRecord(i);
+      LogRecord record = segment.getLogRecord(i);
       final TermIndex ti = record.getTermIndex();
       Assertions.assertEquals(i, ti.getIndex());
       Assertions.assertEquals(term, ti.getTerm());

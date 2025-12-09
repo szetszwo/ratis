@@ -25,9 +25,9 @@ import org.apache.ratis.server.protocol.TermIndex;
 import org.apache.ratis.server.raftlog.LogEntryHeader;
 import org.apache.ratis.server.raftlog.LogProtoUtils;
 import org.apache.ratis.server.raftlog.RaftLog;
+import org.apache.ratis.server.raftlog.segmented.LogRecord;
 import org.apache.ratis.server.storage.RaftStorage;
 import org.apache.ratis.server.raftlog.segmented.v2.CacheInvalidationPolicy.CacheInvalidationPolicyDefault;
-import org.apache.ratis.server.raftlog.segmented.v2.LogSegment.LogRecord;
 import org.apache.ratis.util.AutoCloseableLock;
 import org.apache.ratis.util.AutoCloseableReadWriteLock;
 import org.apache.ratis.util.JavaUtils;
@@ -582,7 +582,7 @@ public class SegmentedRaftLogCache {
     endIndex = Math.min(endIndex, startIndex + size - 1);
     int index = offset;
     for (long i = startIndex; i <= endIndex; i++) {
-      entries[index++] = Optional.ofNullable(segment.getLogRecord(i)).map(LogRecord::getLogEntryHeader).orElse(null);
+      entries[index++] = Optional.ofNullable(segment.getLogRecord(i)).map(LogRecord::getHeader).orElse(null);
     }
   }
 

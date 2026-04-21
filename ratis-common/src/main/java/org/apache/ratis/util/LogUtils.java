@@ -126,7 +126,7 @@ public interface LogUtils {
         }
         log.warn(b.toString());
       } else {
-        log.warn(message.get(), t);
+        log.warn(message.get() + ": " + t);
       }
     }
   }

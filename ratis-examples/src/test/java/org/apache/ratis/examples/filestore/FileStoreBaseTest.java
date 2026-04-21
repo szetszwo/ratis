@@ -144,6 +144,24 @@ public abstract class FileStoreBaseTest<CLUSTER extends MiniRaftCluster>
     cluster.shutdown();
   }
 
+  @Test
+  public void testWriteStateMachineDataFailure() throws Exception {
+    final CLUSTER cluster = newCluster(NUM_PEERS);
+    cluster.start();
+    RaftTestUtil.waitForLeader(cluster);
+
+    final CheckedSupplier<FileStoreClient, IOException> newClient = () -> newFileStoreClient(cluster);
+
+    try {
+      testSingleFile("foo", SizeInBytes.valueOf("1m"), newClient);
+    } catch (Exception e) {
+      LOG.info("XXX Failed: foo", e);
+    }
+
+    testSingleFile("bar", SizeInBytes.valueOf("2k"), newClient);
+    cluster.shutdown();
+  }
+
   private static FileStoreWriter writeSingleFile(
       String path, SizeInBytes fileLength, CheckedSupplier<FileStoreClient, IOException> newClient)
       throws Exception {

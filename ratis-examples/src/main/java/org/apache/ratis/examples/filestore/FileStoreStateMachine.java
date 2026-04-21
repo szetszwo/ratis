@@ -31,6 +31,7 @@ import org.apache.ratis.proto.RaftProtos.LogEntryProto;
 import org.apache.ratis.protocol.Message;
 import org.apache.ratis.protocol.RaftClientRequest;
 import org.apache.ratis.protocol.RaftGroupId;
+import org.apache.ratis.protocol.RaftPeerId;
 import org.apache.ratis.server.RaftServer;
 import org.apache.ratis.server.storage.RaftStorage;
 import org.apache.ratis.statemachine.StateMachineStorage;
@@ -44,6 +45,7 @@ import org.apache.ratis.util.FileUtils;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class FileStoreStateMachine extends BaseStateMachine {
   private final SimpleStateMachineStorage storage = new SimpleStateMachineStorage();
@@ -120,6 +122,8 @@ public class FileStoreStateMachine extends BaseStateMachine {
         .build();
   }
 
+  static final AtomicReference<RaftPeerId> chosenFollower = new AtomicReference<>();
+
   @Override
   public CompletableFuture<Integer> write(LogEntryProto entry, TransactionContext context) {
     final FileStoreRequestProto proto = getProto(context, entry);
@@ -128,6 +132,27 @@ public class FileStoreStateMachine extends BaseStateMachine {
     }
 
     final WriteRequestHeaderProto h = proto.getWriteHeader();
+    final String path = h.getPath().toStringUtf8();
+    try {
+      final RaftServer.Division division = getServer().join().getDivision(getGroupId());
+      final RaftPeerId serverId = division.getId();
+      final boolean isFollower = path.equals("foo") && division.getInfo().isFollower();
+      if (isFollower) {
+        final boolean shouldFail;
+        if (chosenFollower.compareAndSet(null, serverId)) {
+          LOG.info("XXX follower {} is chosen", serverId);
+          shouldFail = true;
+        } else {
+          shouldFail = serverId.equals(chosenFollower.get());
+        }
+        if (shouldFail) {
+          return FileStoreCommon.completeExceptionally(entry.getIndex(), getId() + ": XXX: Failed follower for " + path);
+        }
+      }
+    } catch (IOException e) {
+      LOG.error("XXX Failed to check follower {}", path, e);
+    }
+
     final CompletableFuture<Integer> f = files.write(entry.getIndex(),
         h.getPath().toStringUtf8(), h.getClose(),  h.getSync(), h.getOffset(),
         entry.getStateMachineLogEntry().getStateMachineEntry().getStateMachineData());

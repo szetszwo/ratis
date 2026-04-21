@@ -1698,6 +1698,12 @@ class RaftServerImpl implements RaftServer.Division,
     final long commitIndex = effectiveCommitIndex(proto.getLeaderCommit(), previous, entries.size());
     final long matchIndex = isHeartbeat? RaftLog.INVALID_LOG_INDEX: entries.get(entries.size() - 1).getIndex();
     return appendFuture.whenCompleteAsync((r, t) -> {
+      if  (t != null) {
+        LOG.error("{}: XXX appendEntries* failed: {}", getMemberId(), t.toString());
+      } else if (!entries.isEmpty()) {
+        LOG.info("{}: XXX appendEntries* succeeded {} entries: {} -> {}",
+            getMemberId(), entries.size(), entries.get(0).getIndex(), entries.get(entries.size() - 1).getIndex());
+      }
       followerState.ifPresent(fs -> fs.updateLastRpcTime(FollowerState.UpdateType.APPEND_COMPLETE));
       timer.stop();
     }, getServerExecutor()).thenApply(v -> {

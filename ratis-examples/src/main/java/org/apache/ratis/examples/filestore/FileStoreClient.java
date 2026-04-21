@@ -171,10 +171,15 @@ public class FileStoreClient implements Closeable {
 
   public long write(String path, long offset, boolean close, ByteBuffer buffer, boolean sync)
       throws IOException {
-    final int chunkSize = FileStoreCommon.getChunkSize(buffer.remaining());
-    buffer.limit(chunkSize);
-    final ByteString reply = writeImpl(this::send, path, offset, close, buffer, sync);
-    return WriteReplyProto.parseFrom(reply).getLength();
+    try {
+      final int chunkSize = FileStoreCommon.getChunkSize(buffer.remaining());
+      buffer.limit(chunkSize);
+      final ByteString reply = writeImpl(this::send, path, offset, close, buffer, sync);
+      return WriteReplyProto.parseFrom(reply).getLength();
+    } catch (IOException e) {
+      LOG.error("XXX Write failed for {} at offset {}, close? {}, sync? {}", path, offset, close, sync, e);
+      throw e;
+    }
   }
 
   public DataStreamOutput getStreamOutput(String path, long dataSize, RoutingTable routingTable) {

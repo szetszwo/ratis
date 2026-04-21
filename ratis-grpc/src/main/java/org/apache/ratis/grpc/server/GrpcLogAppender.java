@@ -61,6 +61,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -168,6 +169,7 @@ public class GrpcLogAppender extends LogAppenderBase {
   private final TimeoutExecutor scheduler = TimeoutExecutor.getInstance();
   @SuppressWarnings({"squid:S3077"}) // Suppress volatile for generic type
   private volatile StreamObservers appendLogRequestObserver;
+  private final AtomicBoolean alreadyReset = new AtomicBoolean(false);
   private final boolean useSeparateHBChannel;
 
   private final GrpcServerMetrics grpcServerMetrics;
@@ -212,6 +214,16 @@ public class GrpcLogAppender extends LogAppenderBase {
   }
 
   private void resetClient(AppendEntriesRequest request, Event event) {
+    if (!alreadyReset.compareAndSet(false, true)) {
+      try {
+        final TimeDuration sleep = TimeDuration.ONE_SECOND;
+        LOG.warn("XXX {}: already reset client, sleep {}", this, sleep);
+        sleep.sleep();
+      } catch (InterruptedException e) {
+        throw new IllegalStateException(e);
+      }
+    }
+
     try (AutoCloseableLock writeLock = lock.writeLock(caller, LOG::trace)) {
       getClient().resetConnectBackoff();
       if (appendLogRequestObserver != null) {
@@ -511,6 +523,7 @@ public class GrpcLogAppender extends LogAppenderBase {
 
       switch (reply.getResult()) {
         case SUCCESS:
+          alreadyReset.set(false);
           grpcServerMetrics.onRequestSuccess(getFollowerId().toString(), reply.getIsHearbeat());
           getLeaderState().onFollowerCommitIndex(getFollower(), reply.getFollowerCommit());
           if (getFollower().updateMatchIndex(reply.getMatchIndex())) {
@@ -675,6 +688,7 @@ public class GrpcLogAppender extends LogAppenderBase {
       final long followerSnapshotIndex;
       switch (reply.getResult()) {
         case SUCCESS:
+          alreadyReset.set(false);
           LOG.info("{}: Completed", this);
           getFollower().setAttemptedToInstallSnapshot();
           removePending(reply);

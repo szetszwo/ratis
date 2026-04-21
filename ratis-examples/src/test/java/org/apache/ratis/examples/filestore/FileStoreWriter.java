@@ -221,6 +221,8 @@ final class FileStoreWriter implements Closeable {
       verify(read, offset, n, expected);
       offset += n;
     }
+
+    LOG.info("XXX Verify successful: {}", fileName);
     return this;
   }
 

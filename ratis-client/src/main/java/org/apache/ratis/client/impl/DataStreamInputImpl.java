@@ -28,23 +28,20 @@ import org.apache.ratis.protocol.DataStreamReply;
 import org.apache.ratis.protocol.DataStreamRequestHeader;
 import org.apache.ratis.protocol.RaftClientRequest;
 import org.apache.ratis.protocol.exceptions.AlreadyClosedException;
-import org.apache.ratis.util.JavaUtils;
-import org.apache.ratis.util.Preconditions;
+import org.apache.ratis.util.AsyncQueue;
 import org.apache.ratis.util.ReferenceCountedObject;
 
 import java.io.EOFException;
 import java.nio.ByteBuffer;
-import java.util.LinkedList;
 import java.util.Objects;
-import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 final class DataStreamInputImpl implements DataStreamInput,
     DataStreamObserver<ReferenceCountedObject<DataStreamReply>> {
   private final RaftClientRequest header;
   private final ClientId clientId;
-  private final Queue<ReferenceCountedObject<DataStreamReply>> replies = new LinkedList<>();
-  private final Queue<CompletableFuture<ReferenceCountedObject<DataStreamReply>>> pendingReads = new LinkedList<>();
+  private final AsyncQueue<ReferenceCountedObject<DataStreamReply>> queue;
 
   /*
    * null                  : the stream is open.
@@ -52,11 +49,11 @@ final class DataStreamInputImpl implements DataStreamInput,
    * AlreadyClosedException: the stream is closed by the caller.
    * Other exception       : the stream is failed.
    */
-  private Throwable readException;
 
   DataStreamInputImpl(DataStreamClientRpc dataStreamClientRpc, RaftClientRequest request) {
     this.header = request;
     this.clientId = request.getClientId();
+    this.queue = new AsyncQueue<>(clientId);
     final ByteBuffer buffer = ClientProtoUtils.toRaftClientRequestProtoByteBuffer(header);
     final DataStreamRequestHeader h = new DataStreamRequestHeader(clientId, Type.STREAM_HEADER,
         header.getCallId(), 0, buffer.remaining(), StandardWriteOption.FLUSH, StandardWriteOption.CLOSE);
@@ -66,66 +63,37 @@ final class DataStreamInputImpl implements DataStreamInput,
 
   @Override
   public synchronized void onNext(ReferenceCountedObject<DataStreamReply> reply) {
-    if (readException != null) {
+    if (queue.getFailure() != null) {
       return;
     }
 
+    // receive new reply, offer it to the queue.
     reply.retain();
-    final CompletableFuture<ReferenceCountedObject<DataStreamReply>> pending = pendingReads.poll();
-    if (pending != null) {
-      final boolean completed = pending.complete(reply);
-      Preconditions.assertTrue(completed);
-      return;
-    }
-    replies.add(reply);
+    queue.offer(reply);
   }
 
   @Override
   public synchronized void onError(Throwable throwable) {
     Objects.requireNonNull(throwable, "throwable == null");
     // An error case, release the replies
-    releaseReplies();
-    if (readException == null) {
-      readException = throwable;
-      failPendingReads();
-    }
+    fail(true, () -> throwable);
   }
 
   @Override
   public synchronized void onCompleted() {
     // Not an error case, do not release the replies
-    if (readException == null) {
-      // No more onNext(), the pending reads cannot be completed.
-      readException = new EOFException(clientId + ": end of stream, request=" + header);
-      failPendingReads();
-    }
+
+    // End-of-stream, no more onNext(), the pending reads cannot be completed
+    fail(false, () -> new EOFException(clientId + ": end of stream, request=" + header));
   }
 
-  private void releaseReplies() {
-    for (ReferenceCountedObject<DataStreamReply> reply; (reply = replies.poll()) != null; ) {
-      reply.release();
-    }
-  }
-
-  private void failPendingReads() {
-    Objects.requireNonNull(readException, "readException == null");
-    for (CompletableFuture<ReferenceCountedObject<DataStreamReply>> p; (p = pendingReads.poll()) != null; ) {
-      p.completeExceptionally(readException);
-    }
+  private void fail(boolean release, Supplier<Throwable> throwable) {
+    queue.fail(throwable, release ? ReferenceCountedObject::release : null);
   }
 
   @Override
   public synchronized CompletableFuture<ReferenceCountedObject<DataStreamReply>> readAsync() {
-    final ReferenceCountedObject<DataStreamReply> reply = replies.poll();
-    if (reply != null) {
-      return CompletableFuture.completedFuture(reply);
-    }
-    if (readException != null) {
-      return JavaUtils.completeExceptionally(readException);
-    }
-    final CompletableFuture<ReferenceCountedObject<DataStreamReply>> f = new CompletableFuture<>();
-    pendingReads.add(f);
-    return f;
+    return queue.poll();
   }
 
   @Override
@@ -134,10 +102,6 @@ final class DataStreamInputImpl implements DataStreamInput,
     // (1) release all replies
     // (2) set readException to AlreadyClosedException
     // (3) complete all pendingReads, and
-    releaseReplies();
-    if (readException == null) {
-      readException = new AlreadyClosedException(clientId + ": stream already closed, request=" + header);
-      failPendingReads();
-    }
+    fail(true, () -> new AlreadyClosedException(clientId + ": stream already closed, request=" + header));
   }
 }

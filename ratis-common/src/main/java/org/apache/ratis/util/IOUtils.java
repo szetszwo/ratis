@@ -27,7 +27,9 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
+import java.io.InvalidClassException;
 import java.io.ObjectInputStream;
+import java.io.ObjectStreamClass;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
@@ -205,7 +207,83 @@ public interface IOUtils {
   }
 
   /**
+   * Package prefixes allowed by {@link #readObject(InputStream, Class)}.
+   * The set covers the object graphs actually exchanged by Ratis via this
+   * path (exceptions, causes, {@link StackTraceElement}[], and the JDK
+   * collection/primitive types they transitively reference).
+   * <p>
+   * Everything outside this set is rejected as
+   * {@link InvalidClassException} to mitigate Java deserialization attacks.
+   */
+  String[] READ_OBJECT_ALLOWED_PREFIXES = {
+      "java.lang.",
+      "java.util.",
+      "java.io.",
+      "java.time.",
+      "java.net.",
+      "org.apache.ratis.",
+  };
+
+  /**
+   * @return true if {@code className} refers to a class (including array
+   *     element type) permitted by {@link #READ_OBJECT_ALLOWED_PREFIXES}.
+   *     Primitive array descriptors (e.g. {@code [I}, {@code [B}) are always
+   *     allowed.
+   */
+  static boolean isReadObjectClassAllowed(String className) {
+    // Strip array descriptor: e.g. "[Ljava.lang.String;" -> "java.lang.String",
+    // "[[I" -> "I" (primitive; allowed).
+    String name = className;
+    while (name.startsWith("[")) {
+      name = name.substring(1);
+    }
+    if (name.isEmpty()) {
+      return false;
+    }
+    // Primitive array element: single letter code (B, C, D, F, I, J, S, Z).
+    if (name.length() == 1) {
+      return true;
+    }
+    // Object array element: "Lfully.qualified.Name;"
+    if (name.charAt(0) == 'L' && name.endsWith(";")) {
+      name = name.substring(1, name.length() - 1);
+    }
+    for (String prefix : READ_OBJECT_ALLOWED_PREFIXES) {
+      if (name.startsWith(prefix)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * An {@link ObjectInputStream} that rejects any class outside the
+   * {@link #READ_OBJECT_ALLOWED_PREFIXES} allowlist.
+   */
+  final class FilteredObjectInputStream extends ObjectInputStream {
+    FilteredObjectInputStream(InputStream in) throws IOException {
+      super(in);
+    }
+
+    @Override
+    protected Class<?> resolveClass(ObjectStreamClass desc)
+        throws IOException, ClassNotFoundException {
+      final String name = desc.getName();
+      if (!isReadObjectClassAllowed(name)) {
+        throw new InvalidClassException(name, "Class not allowed by IOUtils.readObject filter");
+      }
+      return super.resolveClass(desc);
+    }
+  }
+
+  /**
    * Read an object from the given input stream.
+   * <p>
+   * The underlying {@link ObjectInputStream} is a
+   * {@link FilteredObjectInputStream} that permits only a small allowlist of
+   * packages (see {@link #READ_OBJECT_ALLOWED_PREFIXES}). Any class outside
+   * the allowlist causes an {@link InvalidClassException}, which is wrapped
+   * and rethrown as {@link IllegalStateException}.
    *
    * @param in input stream to read from.
    * @param clazz the class of the object.
@@ -215,7 +293,7 @@ public interface IOUtils {
    */
   static <T> T readObject(InputStream in, Class<T> clazz) {
     final Object obj;
-    try(ObjectInputStream oin = new ObjectInputStream(in)) {
+    try(ObjectInputStream oin = new FilteredObjectInputStream(in)) {
       obj = oin.readObject();
     } catch (IOException | ClassNotFoundException e) {
       throw new IllegalStateException("Failed to readObject for class " + clazz, e);

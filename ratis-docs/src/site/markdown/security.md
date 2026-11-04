@@ -73,17 +73,22 @@ When a TLS configuration is not set, the corresponding connection is neither aut
 | `raft.grpc.server.tls.conf`             | `GrpcConfigKeys.Server.setTlsConf`             | gRPC server TLS conf for server-to-server connections    |
 | `raft.grpc.client.tls.conf`             | `GrpcConfigKeys.Client.setTlsConf`             | gRPC client TLS conf for client-to-server connections    |
 | `raft.grpc.admin.tls.conf`              | `GrpcConfigKeys.Admin.setTlsConf`              | gRPC admin TLS conf for admin connections                |
-| `raft.netty.dataStream.server.tls.conf` | `NettyConfigKeys.DataStream.Server.setTlsConf` | Netty data stream server TLS conf                        |
-| `raft.netty.dataStream.client.tls.conf` | `NettyConfigKeys.DataStream.Client.setTlsConf` | Netty data stream client TLS conf                        |
+| `raft.netty.server.tls.conf`            | `NettyConfigKeys.Server.setTlsConf`            | Netty server TLS conf for incoming connections           |
+| `raft.netty.client.tls.conf`            | `NettyConfigKeys.Client.setTlsConf`            | Netty client TLS conf for outgoing connections           |
+| `raft.netty.dataStream.server.tls.conf` | `NettyConfigKeys.DataStream.Server.setTlsConf` | Netty data stream server TLS conf; default: Netty server |
+| `raft.netty.dataStream.client.tls.conf` | `NettyConfigKeys.DataStream.Client.setTlsConf` | Netty data stream client TLS conf; default: Netty client |
 
 Notes:
 
 - The gRPC confs are `GrpcTlsConfig` objects.
-  The data stream confs are `TlsConf` objects; a `GrpcTlsConfig` can also be used since it is a `TlsConf`.
-- The data stream confs do not fall back to the gRPC confs.
-  When data stream is enabled, its confs must be set separately.
-- The Netty RPC transport (`raft.netty.server`) currently does not support TLS;
-  see [RATIS-2801](https://issues.apache.org/jira/browse/RATIS-2801).
+  The Netty and the data stream confs are `TlsConf` objects;
+  a `GrpcTlsConfig` can also be used since it is a `TlsConf`.
+- For the Netty RPC transport, a server uses the Netty server conf to accept connections
+  and the Netty client conf to connect to the other servers.
+  Therefore, a server must set both confs, and a client must set the Netty client conf.
+- The data stream server/client conf falls back to the Netty server/client conf when it is not set.
+  The data stream confs do not fall back to the gRPC confs.
+  When using gRPC with data stream, the data stream confs must be set separately.
 
 For example, a server using gRPC with mutual TLS can be built as below.
 

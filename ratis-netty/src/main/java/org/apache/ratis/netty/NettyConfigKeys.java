@@ -74,6 +74,16 @@ public interface NettyConfigKeys {
     static void setUseEpoll(RaftProperties properties, boolean enable) {
       setBoolean(properties::setBoolean, USE_EPOLL_KEY, enable);
     }
+
+    String TLS_CONF_PARAMETER = PREFIX + ".tls.conf";
+    Class<TlsConf> TLS_CONF_CLASS = TlsConf.class;
+    static TlsConf tlsConf(Parameters parameters) {
+      return parameters == null ? null
+          : getTlsConf(key -> parameters.get(key, TLS_CONF_CLASS), TLS_CONF_PARAMETER, getDefaultLog());
+    }
+    static void setTlsConf(Parameters parameters, TlsConf conf) {
+      ConfUtils.setTlsConf((key, value) -> parameters.put(key, value, TLS_CONF_CLASS), TLS_CONF_PARAMETER, conf);
+    }
   }
 
   interface Client {
@@ -91,6 +101,16 @@ public interface NettyConfigKeys {
     }
     static void setUseEpoll(RaftProperties properties, boolean enable) {
       setBoolean(properties::setBoolean, USE_EPOLL_KEY, enable);
+    }
+
+    String TLS_CONF_PARAMETER = PREFIX + ".tls.conf";
+    Class<TlsConf> TLS_CONF_CLASS = TlsConf.class;
+    static TlsConf tlsConf(Parameters parameters) {
+      return parameters == null ? null
+          : getTlsConf(key -> parameters.get(key, TLS_CONF_CLASS), TLS_CONF_PARAMETER, getDefaultLog());
+    }
+    static void setTlsConf(Parameters parameters, TlsConf conf) {
+      ConfUtils.setTlsConf((key, value) -> parameters.put(key, value, TLS_CONF_CLASS), TLS_CONF_PARAMETER, conf);
     }
   }
 
@@ -130,8 +150,10 @@ public interface NettyConfigKeys {
 
       String TLS_CONF_PARAMETER = PREFIX + ".tls.conf";
       Class<TlsConf> TLS_CONF_CLASS = TlsConf.class;
+      /** @return the data stream client TLS conf if it is set; otherwise, fall back to the Netty client TLS conf. */
       static TlsConf tlsConf(Parameters parameters) {
-        return getTlsConf(key -> parameters.get(key, TLS_CONF_CLASS), TLS_CONF_PARAMETER, getDefaultLog());
+        return get((key, defaultValue) -> parameters.get(key, TLS_CONF_CLASS), TLS_CONF_PARAMETER, null,
+            NettyConfigKeys.Client.TLS_CONF_PARAMETER, NettyConfigKeys.Client.tlsConf(parameters), getDefaultLog());
       }
       static void setTlsConf(Parameters parameters, TlsConf conf) {
         ConfUtils.setTlsConf((key, value) -> parameters.put(key, value, TLS_CONF_CLASS), TLS_CONF_PARAMETER, conf);
@@ -194,8 +216,10 @@ public interface NettyConfigKeys {
 
       String TLS_CONF_PARAMETER = PREFIX + ".tls.conf";
       Class<TlsConf> TLS_CONF_CLASS = TlsConf.class;
+      /** @return the data stream server TLS conf if it is set; otherwise, fall back to the Netty server TLS conf. */
       static TlsConf tlsConf(Parameters parameters) {
-        return getTlsConf(key -> parameters.get(key, TLS_CONF_CLASS), TLS_CONF_PARAMETER, getDefaultLog());
+        return get((key, defaultValue) -> parameters.get(key, TLS_CONF_CLASS), TLS_CONF_PARAMETER, null,
+            NettyConfigKeys.Server.TLS_CONF_PARAMETER, NettyConfigKeys.Server.tlsConf(parameters), getDefaultLog());
       }
       static void setTlsConf(Parameters parameters, TlsConf conf) {
         ConfUtils.setTlsConf((key, value) -> parameters.put(key, value, TLS_CONF_CLASS), TLS_CONF_PARAMETER, conf);

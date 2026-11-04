@@ -33,8 +33,10 @@ import org.apache.ratis.proto.netty.NettyProtos.RaftNettyServerRequestProto;
 import org.apache.ratis.protocol.exceptions.AlreadyClosedException;
 import org.apache.ratis.thirdparty.io.netty.handler.logging.LogLevel;
 import org.apache.ratis.thirdparty.io.netty.handler.logging.LoggingHandler;
+import org.apache.ratis.thirdparty.io.netty.handler.ssl.SslContext;
 import org.apache.ratis.util.IOUtils;
 import org.apache.ratis.util.JavaUtils;
+import org.apache.ratis.util.NetUtils;
 import org.apache.ratis.util.NettyUtils;
 import org.apache.ratis.util.PeerProxyMap;
 import org.apache.ratis.util.Preconditions;
@@ -45,6 +47,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -59,15 +62,15 @@ public class NettyRpcProxy implements Closeable {
   public static class PeerMap extends PeerProxyMap<NettyRpcProxy> {
     private final EventLoopGroup group;
 
-    public PeerMap(String name, RaftProperties properties) {
-      this(name, properties, NettyUtils.newEventLoopGroup(name, 0,
-          NettyConfigKeys.Client.useEpoll(properties), true));
+    public PeerMap(String name, SslContext clientSslContext, RaftProperties properties) {
+      this(name, RaftClientConfigKeys.Rpc.requestTimeout(properties), clientSslContext,
+          NettyUtils.newEventLoopGroup(name, 0, NettyConfigKeys.Client.useEpoll(properties), true));
     }
 
-    private PeerMap(String name, RaftProperties properties, EventLoopGroup group) {
+    private PeerMap(String name, TimeDuration requestTimeout, SslContext sslContext, EventLoopGroup group) {
       super(name, peer -> {
         try {
-          return new NettyRpcProxy(peer, properties, group);
+          return new NettyRpcProxy(peer, requestTimeout, sslContext, group);
         } catch (InterruptedException e) {
           Thread.currentThread().interrupt();
           throw IOUtils.toInterruptedIOException("Failed connecting to " + peer, e);
@@ -150,7 +153,8 @@ public class NettyRpcProxy implements Closeable {
     private final NettyClient client = new NettyClient(peer.getAddress());
     private final Map<Long, CompletableFuture<RaftNettyServerReplyProto>> replies = new ConcurrentHashMap<>();
 
-    Connection(EventLoopGroup group) throws InterruptedException {
+    Connection(SslContext sslContext, EventLoopGroup group) throws InterruptedException {
+      final InetSocketAddress address = sslContext == null ? null : NetUtils.createSocketAddr(peer.getAddress());
       final ChannelInboundHandler inboundHandler
           = new SimpleChannelInboundHandler<RaftNettyServerReplyProto>() {
         @Override
@@ -190,6 +194,9 @@ public class NettyRpcProxy implements Closeable {
         @Override
         protected void initChannel(SocketChannel ch) {
           final ChannelPipeline p = ch.pipeline();
+          if (sslContext != null) {
+            p.addLast("ssl", sslContext.newHandler(ch.alloc(), address.getHostName(), address.getPort()));
+          }
 
           // LoggingHandler emits all events at the chosen level; use DEBUG to reduce noise by default.
           p.addLast(new LoggingHandler(LogLevel.DEBUG));
@@ -272,10 +279,11 @@ public class NettyRpcProxy implements Closeable {
   private final Connection connection;
   private final TimeDuration requestTimeoutDuration;
 
-  public NettyRpcProxy(RaftPeer peer, RaftProperties properties, EventLoopGroup group) throws InterruptedException {
+  public NettyRpcProxy(RaftPeer peer, TimeDuration requestTimeout, SslContext sslContext, EventLoopGroup group)
+      throws InterruptedException {
     this.peer = peer;
-    this.connection = new Connection(group);
-    this.requestTimeoutDuration = RaftClientConfigKeys.Rpc.requestTimeout(properties);
+    this.connection = new Connection(sslContext, group);
+    this.requestTimeoutDuration = requestTimeout;
   }
 
   @Override

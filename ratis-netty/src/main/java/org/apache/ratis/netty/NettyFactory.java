@@ -24,11 +24,35 @@ import org.apache.ratis.netty.client.NettyClientRpc;
 import org.apache.ratis.netty.server.NettyRpcService;
 import org.apache.ratis.protocol.ClientId;
 import org.apache.ratis.rpc.SupportedRpcType;
+import org.apache.ratis.security.TlsConf;
 import org.apache.ratis.server.RaftServer;
 import org.apache.ratis.server.ServerFactory;
+import org.apache.ratis.thirdparty.io.netty.handler.ssl.SslContext;
+import org.apache.ratis.util.JavaUtils;
+import org.apache.ratis.util.MemoizedSupplier;
+import org.apache.ratis.util.NettyUtils;
 
 public class NettyFactory implements ServerFactory, ClientFactory {
-  public NettyFactory(Parameters parameters) {}
+  /** Build lazily since a client does not need the server context. When TLS is disabled, the supplier is null. */
+  private final MemoizedSupplier<SslContext> serverSslContext;
+  private final MemoizedSupplier<SslContext> clientSslContext;
+
+  public NettyFactory(Parameters parameters) {
+    final TlsConf serverTlsConf = NettyConfigKeys.Server.tlsConf(parameters);
+    this.serverSslContext = serverTlsConf == null ? null
+        : JavaUtils.memoize(() -> NettyUtils.buildSslContextForServer(serverTlsConf));
+    final TlsConf clientTlsConf = NettyConfigKeys.Client.tlsConf(parameters);
+    this.clientSslContext = clientTlsConf == null ? null
+        : JavaUtils.memoize(() -> NettyUtils.buildSslContextForClient(clientTlsConf));
+  }
+
+  private SslContext getServerSslContext() {
+    return serverSslContext == null ? null : serverSslContext.get();
+  }
+
+  private SslContext getClientSslContext() {
+    return clientSslContext == null ? null : clientSslContext.get();
+  }
 
   @Override
   public SupportedRpcType getRpcType() {
@@ -37,11 +61,15 @@ public class NettyFactory implements ServerFactory, ClientFactory {
 
   @Override
   public NettyRpcService newRaftServerRpc(RaftServer server) {
-    return NettyRpcService.newBuilder().setServer(server).build();
+    return NettyRpcService.newBuilder()
+        .setServer(server)
+        .setServerSslContext(getServerSslContext())
+        .setClientSslContext(getClientSslContext())
+        .build();
   }
 
   @Override
   public NettyClientRpc newRaftClientRpc(ClientId clientId, RaftProperties properties) {
-    return new NettyClientRpc(clientId, properties);
+    return new NettyClientRpc(clientId, getClientSslContext(), properties);
   }
 }

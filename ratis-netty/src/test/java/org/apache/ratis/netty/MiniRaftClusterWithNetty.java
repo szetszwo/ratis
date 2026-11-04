@@ -52,13 +52,18 @@ public class MiniRaftClusterWithNetty extends MiniRaftCluster.RpcBase {
       = new DelayLocalExecutionInjection(NettyRpcService.SEND_SERVER_REQUEST);
 
   protected MiniRaftClusterWithNetty(String[] ids, String[] listenerIds, RaftProperties properties) {
-    super(ids, listenerIds, properties, null);
+    this(ids, listenerIds, properties, null);
+  }
+
+  public MiniRaftClusterWithNetty(String[] ids, String[] listenerIds, RaftProperties properties,
+      Parameters parameters) {
+    super(ids, listenerIds, properties, parameters);
   }
 
   @Override
   protected Parameters setPropertiesAndInitParameters(RaftPeerId id, RaftGroup group, RaftProperties properties) {
     NettyConfigKeys.Server.setPort(properties, getPort(id, group));
-    return null;
+    return parameters;
   }
 
   @Override

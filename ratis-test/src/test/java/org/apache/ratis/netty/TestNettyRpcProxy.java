@@ -18,7 +18,7 @@
 package org.apache.ratis.netty;
 
 import org.apache.ratis.BaseTest;
-import org.apache.ratis.conf.RaftProperties;
+import org.apache.ratis.client.RaftClientConfigKeys;
 import org.apache.ratis.protocol.RaftPeer;
 import org.apache.ratis.protocol.exceptions.AlreadyClosedException;
 import org.apache.ratis.proto.RaftProtos.GroupListRequestProto;
@@ -77,7 +77,7 @@ public class TestNettyRpcProxy extends BaseTest {
       final InetSocketAddress address = (InetSocketAddress) serverChannel.localAddress();
       final String peerAddress = address.getHostString() + ":" + address.getPort();
       final RaftPeer peer = RaftPeer.newBuilder().setId("s0").setAddress(peerAddress).build();
-      proxy = new NettyRpcProxy(peer, new RaftProperties(), clientGroup);
+      proxy = new NettyRpcProxy(peer, RaftClientConfigKeys.Rpc.REQUEST_TIMEOUT_DEFAULT, null, clientGroup);
 
       // Close to force AlreadyClosedException on write and trigger rollback logic.
       proxy.close();

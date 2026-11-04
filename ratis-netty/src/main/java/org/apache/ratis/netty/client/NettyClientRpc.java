@@ -30,6 +30,7 @@ import org.apache.ratis.proto.RaftProtos.GroupManagementRequestProto;
 import org.apache.ratis.proto.RaftProtos.SetConfigurationRequestProto;
 import org.apache.ratis.proto.netty.NettyProtos.RaftNettyServerRequestProto;
 import org.apache.ratis.protocol.exceptions.TimeoutIOException;
+import org.apache.ratis.thirdparty.io.netty.handler.ssl.SslContext;
 import org.apache.ratis.util.JavaUtils;
 import org.apache.ratis.util.TimeDuration;
 import org.apache.ratis.util.TimeoutExecutor;
@@ -43,12 +44,12 @@ public class NettyClientRpc extends RaftClientRpcWithProxy<NettyRpcProxy> {
 
   public static final Logger LOG = LoggerFactory.getLogger(NettyClientRpc.class);
 
-  private ClientId clientId;
+  private final ClientId clientId;
   private final TimeDuration requestTimeout;
   private final TimeoutExecutor scheduler = TimeoutExecutor.getInstance();
 
-  public NettyClientRpc(ClientId clientId, RaftProperties properties) {
-    super(new NettyRpcProxy.PeerMap(clientId.toString(), properties));
+  public NettyClientRpc(ClientId clientId, SslContext sslContext, RaftProperties properties) {
+    super(new NettyRpcProxy.PeerMap(clientId.toString(), sslContext, properties));
     this.clientId = clientId;
     this.requestTimeout = RaftClientConfigKeys.Rpc.requestTimeout(properties);
   }
